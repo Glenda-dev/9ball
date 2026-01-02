@@ -6,11 +6,11 @@ extern crate alloc;
 use glenda::bootinfo::{BOOTINFO_VA, BootInfo, CONSOLE_CAP, INITRD_CAP, INITRD_VA};
 use glenda::cap::pagetable::perms;
 use glenda::cap::{CapPtr, CapType, rights};
-use glenda::factotum as protocol;
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
 use glenda::log;
 use glenda::println;
+use glenda::protocol::factotum as protocol;
 
 mod manager;
 use manager::ResourceManager;
@@ -138,6 +138,16 @@ fn main() -> ! {
     }
     println!("Transferred {} untyped caps to Factotum", dest_slot - 100);
 
+    // Transfer IRQ Caps
+    let irq_start_slot = dest_slot;
+    let irq_count = bootinfo.irq.end.0 - bootinfo.irq.start.0;
+    for i in 0..irq_count {
+        let cap = CapPtr(bootinfo.irq.start.0 + i);
+        f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
+        dest_slot += 1;
+    }
+    println!("Transferred {} IRQ caps to Factotum", irq_count);
+
     // 9. Configure & Start TCB
     // tcb_configure(cspace, vspace, utcb_addr, fault_ep, utcb_frame)
     // Fault EP: We can use the same endpoint (slot 10) so Factotum receives its own faults?
@@ -161,6 +171,12 @@ fn main() -> ! {
     let args = [100, untyped_count, 0, 0, 0, 0];
     f_endpoint.ipc_call(msg_tag, &args);
     println!("Sent INIT_RESOURCES to Factotum");
+
+    // Send INIT_IRQ
+    let msg_tag = MsgTag::new(protocol::INIT_IRQ, 2);
+    let args = [irq_start_slot, irq_count, 0, 0, 0, 0];
+    f_endpoint.ipc_call(msg_tag, &args);
+    println!("Sent INIT_IRQ to Factotum");
 
     // Iterate over other initrd entries
     for entry in initrd.entries.iter() {
