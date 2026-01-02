@@ -1,0 +1,7 @@
+[package]
+name = "nineball"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libglenda = { path = "../../lib/libglenda-rs", package = "libglenda-rs" }
