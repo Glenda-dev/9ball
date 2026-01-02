@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-libglenda-rs = { git = "https://github.com/Glenda-dev/libglenda-rs" }
+libglenda-rs = { path = "../../lib/libglenda-rs" }
