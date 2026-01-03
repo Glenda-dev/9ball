@@ -120,6 +120,7 @@ fn start_factotum(
     f_cnode.cnode_mint(f_tcb, 2, 0, rights::ALL);
     f_cnode.cnode_mint(f_utcb_frame, 3, 0, rights::ALL);
     f_cnode.cnode_copy(CapPtr(INITRD_CAP), 4, rights::READ);
+    f_cnode.cnode_copy(CapPtr(glenda::bootinfo::BOOTINFO_SLOT), 9, rights::READ);
     f_cnode.cnode_copy(CapPtr(CONSOLE_CAP), 8, rights::ALL);
     f_cnode.cnode_mint(f_endpoint, 10, 0, rights::ALL);
 
@@ -254,7 +255,7 @@ fn spawn_services(f_endpoint: CapPtr, manifest: &Manifest, manifest_frame: Optio
 
         let utcb = UTCB::current();
         utcb.clear();
-        
+
         let tag = MsgTag::new(protocol::FACTOTUM_PROTO, 1);
         let args = [protocol::SPAWN_SERVICE_MANIFEST, i, 0, 0, 0, 0, 0];
         f_endpoint.ipc_call(tag, args);
