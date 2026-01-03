@@ -8,7 +8,7 @@ use glenda::cap::pagetable::perms;
 use glenda::cap::{CapPtr, CapType, rights};
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
-use glenda::log;
+use glenda::console;
 use glenda::println;
 use glenda::protocol::factotum as protocol;
 
@@ -24,7 +24,7 @@ const FACTOTUM_LOAD_ADDR: usize = 0x10000;
 #[unsafe(no_mangle)]
 fn main() -> ! {
     // Initialize logging
-    log::init(CapPtr(CONSOLE_CAP));
+    console::init(CapPtr(CONSOLE_CAP));
 
     println!("Hello from 9ball (Root Task)!");
 
