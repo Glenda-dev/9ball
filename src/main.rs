@@ -7,8 +7,10 @@ use glenda::bootinfo::{BOOTINFO_VA, BootInfo, CONSOLE_CAP, INITRD_CAP, INITRD_VA
 use glenda::cap::pagetable::perms;
 use glenda::cap::{CapPtr, CapType, rights};
 use glenda::console;
+use glenda::elf::{ElfFile, PF_R, PF_W, PF_X, PT_LOAD};
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
+use glenda::manifest::Manifest;
 use glenda::println;
 use glenda::protocol::factotum as protocol;
 
@@ -18,7 +20,12 @@ use manager::ResourceManager;
 const SCRATCH_VA: usize = 0x5000_0000;
 const FACTOTUM_STACK_TOP: usize = 0x8000_0000;
 const FACTOTUM_UTCB_ADDR: usize = 0x7FFF_F000;
-const FACTOTUM_LOAD_ADDR: usize = 0x10000;
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => ({
+        glenda::println!("9ball: {}", format_args!($($arg)*));
+    })
+}
 
 // TODO: Refactor this
 #[unsafe(no_mangle)]
@@ -26,10 +33,10 @@ fn main() -> ! {
     // Initialize logging
     console::init(CapPtr(CONSOLE_CAP));
 
-    println!("Hello from 9ball (Root Task)!");
+    log!("Hello from 9ball (Root Task)!");
 
     let bootinfo = unsafe { &*(BOOTINFO_VA as *const BootInfo) };
-    println!("BootInfo Magic: {:#x}", bootinfo.magic);
+    log!("BootInfo Magic: {:#x}", bootinfo.magic);
 
     // Map Initrd Frame
     let vspace = CapPtr(1);
@@ -37,10 +44,10 @@ fn main() -> ! {
 
     let ret = vspace.pagetable_map(initrd_frame, INITRD_VA, perms::READ);
     if ret != 0 {
-        println!("Failed to map initrd: error code {}", ret);
+        log!("Failed to map initrd: error code {}", ret);
         loop {}
     }
-    println!("Initrd mapped at {:#x}", INITRD_VA);
+    log!("Initrd mapped at {:#x}", INITRD_VA);
 
     let total_size_ptr = (INITRD_VA + 8) as *const u32;
     let total_size = unsafe { *total_size_ptr } as usize;
@@ -48,61 +55,80 @@ fn main() -> ! {
     let initrd_slice = unsafe { core::slice::from_raw_parts(INITRD_VA as *const u8, total_size) };
     let initrd = Initrd::new(initrd_slice).expect("Failed to parse initrd");
 
+    // 1. Init Manager
+    let mut rm = ResourceManager::new(bootinfo);
+
+    // 2. Start Factotum
+    let (f_endpoint, manifest_frame, manifest) = start_factotum(&mut rm, &initrd, initrd_slice);
+
+    // 3. Start other components via Factotum
+    spawn_services(f_endpoint, &manifest, manifest_frame);
+
+    // 4. Enter Monitor Loop
+    monitor(CapPtr(11)); // 9ball's own endpoint
+}
+
+fn start_factotum(
+    rm: &mut ResourceManager,
+    initrd: &Initrd,
+    initrd_slice: &[u8],
+) -> (CapPtr, Option<CapPtr>, Manifest) {
+    let vspace = CapPtr(1);
+
     // 1. Find Factotum
     let factotum_entry =
         initrd.entries.iter().find(|e| e.name == "factotum").expect("Factotum not found in initrd");
     let factotum_data =
         &initrd_slice[factotum_entry.offset..factotum_entry.offset + factotum_entry.size];
 
-    println!("Found Factotum. Size: {}", factotum_data.len());
+    log!("Found Factotum. Size: {}", factotum_data.len());
 
     // Find Manifest
     let manifest_entry = initrd.entries.iter().find(|e| e.name == "manifest");
-    let manifest_data = if let Some(entry) = manifest_entry {
-        Some(&initrd_slice[entry.offset..entry.offset + entry.size])
+    let manifest = if let Some(entry) = manifest_entry {
+        let data = &initrd_slice[entry.offset..entry.offset + entry.size];
+        Manifest::parse(data)
     } else {
-        None
+        Manifest { service: alloc::vec::Vec::new(), driver: alloc::vec::Vec::new() }
     };
 
-    // 2. Init Manager
-    let mut rm = ResourceManager::new(bootinfo);
-
-    // 3. Allocate Factotum Resources
+    // 2. Allocate Factotum Resources
     let f_cnode = rm.alloc_object(CapType::CNode, 12).expect("Failed to alloc CNode");
     let f_vspace = rm.alloc_object(CapType::PageTable, 0).expect("Failed to alloc VSpace");
     let f_tcb = rm.alloc_object(CapType::TCB, 0).expect("Failed to alloc TCB");
     let f_endpoint = rm.alloc_object(CapType::Endpoint, 0).expect("Failed to alloc Endpoint");
     let f_utcb_frame = rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc UTCB Frame");
+    let f_trapframe = rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc TrapFrame");
+    let f_kstack = rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc KStack");
     let f_stack_frame = rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc Stack Frame");
 
+    // Allocate an endpoint for 9ball to receive faults/notifications
+    let monitor_ep = rm.alloc_object(CapType::Endpoint, 0).expect("Failed to alloc Monitor EP");
+    // Mint into 9ball's own CSpace (Slot 11)
+    CapPtr(0).cnode_mint(monitor_ep, 11, 0, rights::ALL);
+
     // Allocate Manifest Frame if needed
-    let manifest_frame = if manifest_data.is_some() {
+    let manifest_frame = if manifest_entry.is_some() {
         Some(rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc Manifest Frame"))
     } else {
         None
     };
 
-    // 4. Setup Factotum CSpace
-    // Slot 0: CSpace
+    // 3. Setup Factotum CSpace
     f_cnode.cnode_mint(f_cnode, 0, 0, rights::ALL);
-    // Slot 1: VSpace
     f_cnode.cnode_mint(f_vspace, 1, 0, rights::ALL);
-    // Slot 2: TCB
     f_cnode.cnode_mint(f_tcb, 2, 0, rights::ALL);
-    // Slot 3: UTCB (Usually not in CSpace, but TCB points to it. Wait, TCB configure needs UTCB address, not cap slot? No, TCB configure needs UTCB Frame Cap?)
-    // libglenda-rs: tcb_configure(cspace, vspace, utcb_addr, fault_ep, utcb_frame_cap)
-
-    // Slot 4: Initrd Frame (Copy from Root)
+    f_cnode.cnode_mint(f_utcb_frame, 3, 0, rights::ALL);
     f_cnode.cnode_copy(CapPtr(INITRD_CAP), 4, rights::READ);
-
-    // Slot 8: Console
     f_cnode.cnode_copy(CapPtr(CONSOLE_CAP), 8, rights::ALL);
-
-    // Slot 10: Endpoint (For listening)
     f_cnode.cnode_mint(f_endpoint, 10, 0, rights::ALL);
 
+    // 4. Set 9ball as Factotum's fault handler
+    f_tcb.tcb_set_fault_handler(monitor_ep);
+
     // Copy Manifest Data
-    if let (Some(frame), Some(data)) = (manifest_frame, manifest_data) {
+    if let (Some(frame), Some(entry)) = (manifest_frame, manifest_entry) {
+        let data = &initrd_slice[entry.offset..entry.offset + entry.size];
         vspace.pagetable_map(frame, SCRATCH_VA, perms::READ | perms::WRITE);
         let scratch_ptr = SCRATCH_VA as *mut u8;
         unsafe {
@@ -114,162 +140,157 @@ fn main() -> ! {
             );
         }
         vspace.pagetable_unmap(SCRATCH_VA);
-
-        // Put in Factotum CSpace at slot 200
         f_cnode.cnode_mint(frame, 200, 0, rights::READ);
     }
 
-    // 5. Load Flat Binary
-    let load_addr = FACTOTUM_LOAD_ADDR;
-    let file_size = factotum_data.len();
-    let pages = (file_size + 4095) / 4096;
+    // 4. Load ELF Binary
+    let elf = ElfFile::new(factotum_data).expect("Factotum is not a valid ELF");
+    let entry_point = elf.entry_point();
 
-    for i in 0..pages {
-        let page_vaddr = load_addr + i * 4096;
-        let frame = rm.alloc_object(CapType::Frame, 0).expect("OOM loading binary");
+    for phdr in elf.program_headers() {
+        if phdr.p_type != PT_LOAD {
+            continue;
+        }
 
-        // Map to Scratch to copy data
-        vspace.pagetable_map(frame, SCRATCH_VA, perms::READ | perms::WRITE);
+        let file_size = phdr.p_filesz as usize;
+        let mem_size = phdr.p_memsz as usize;
+        let vaddr = phdr.p_vaddr as usize;
+        let offset = phdr.p_offset as usize;
 
-        // Zero the page
-        let scratch_ptr = SCRATCH_VA as *mut u8;
-        unsafe { scratch_ptr.write_bytes(0, 4096) };
+        let pages = (mem_size + 4095) / 4096;
+        for i in 0..pages {
+            let page_vaddr = (vaddr & !4095) + i * 4096;
+            let frame = rm.alloc_object(CapType::Frame, 0).expect("OOM loading ELF");
+            vspace.pagetable_map(frame, SCRATCH_VA, perms::READ | perms::WRITE);
+            let scratch_ptr = SCRATCH_VA as *mut u8;
+            unsafe { scratch_ptr.write_bytes(0, 4096) };
 
-        // Copy data
-        let offset = i * 4096;
-        let copy_len = core::cmp::min(4096, file_size - offset);
-        let src_ptr = &factotum_data[offset];
+            let copy_start = core::cmp::max(vaddr, page_vaddr);
+            let copy_end = core::cmp::min(vaddr + file_size, page_vaddr + 4096);
 
-        unsafe { core::ptr::copy_nonoverlapping(src_ptr as *const u8, scratch_ptr, copy_len) };
+            if copy_start < copy_end {
+                let src_offset = offset + (copy_start - vaddr);
+                let dst_offset = copy_start - page_vaddr;
+                let copy_len = copy_end - copy_start;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        factotum_data.as_ptr().add(src_offset),
+                        scratch_ptr.add(dst_offset),
+                        copy_len,
+                    );
+                }
+            }
+            vspace.pagetable_unmap(SCRATCH_VA);
 
-        // Unmap from Scratch
-        vspace.pagetable_unmap(SCRATCH_VA);
-
-        // Map to Factotum VSpace (RWX for simplicity, as it is flat binary code+data)
-        f_vspace.pagetable_map(frame, page_vaddr, perms::READ | perms::WRITE | perms::EXECUTE);
+            let mut flags = perms::READ;
+            if phdr.p_flags & PF_W != 0 {
+                flags |= perms::WRITE;
+            }
+            if phdr.p_flags & PF_X != 0 {
+                flags |= perms::EXECUTE;
+            }
+            f_vspace.pagetable_map(frame, page_vaddr, flags);
+        }
     }
 
-    // 6. Setup Stack
-    // Map stack frame to Factotum VSpace
+    // 5. Setup Stack & UTCB
     f_vspace.pagetable_map(f_stack_frame, FACTOTUM_STACK_TOP - 4096, perms::READ | perms::WRITE);
-
-    // 7. Setup UTCB
-    // Map UTCB frame to Factotum VSpace
     f_vspace.pagetable_map(f_utcb_frame, FACTOTUM_UTCB_ADDR, perms::READ | perms::WRITE);
 
-    // 8. Transfer Remaining Untyped
+    // 6. Transfer Remaining Untyped & IRQ
     let mut dest_slot = 100;
     while rm.untyped_slots.start.0 < rm.untyped_slots.end.0 {
         let cap = rm.untyped_slots.start;
         rm.untyped_slots.start.0 += 1;
-
-        // Move to Factotum CSpace
-        // We use Mint with badge 0? Or Copy? Move?
-        // libglenda-rs doesn't have 'move' yet? It has 'mint', 'copy'.
-        // We can use 'mint' to give full rights.
         f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
         dest_slot += 1;
     }
-    println!("Transferred {} untyped caps to Factotum", dest_slot - 100);
+    log!("Transferred {} untyped caps to Factotum", dest_slot - 100);
 
-    // Transfer IRQ Caps
     let irq_start_slot = dest_slot;
+    let bootinfo = unsafe { &*(BOOTINFO_VA as *const BootInfo) };
     let irq_count = bootinfo.irq.end.0 - bootinfo.irq.start.0;
     for i in 0..irq_count {
         let cap = CapPtr(bootinfo.irq.start.0 + i);
         f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
         dest_slot += 1;
     }
-    println!("Transferred {} IRQ caps to Factotum", irq_count);
+    log!("Transferred {} IRQ caps to Factotum", irq_count);
 
-    // 9. Configure & Start TCB
-    // tcb_configure(cspace, vspace, utcb_addr, fault_ep, utcb_frame)
-    // Fault EP: We can use the same endpoint (slot 10) so Factotum receives its own faults?
-    // Or 0 if no handler. Let's use 0 for now.
-    f_tcb.tcb_configure(CapPtr(0), CapPtr(1), FACTOTUM_UTCB_ADDR, CapPtr(0), f_utcb_frame);
-    f_tcb.tcb_set_priority(255); // High priority
-
-    // Set registers: Entry point, Stack Pointer
-    f_tcb.tcb_set_registers(rights::ALL as usize, FACTOTUM_LOAD_ADDR, FACTOTUM_STACK_TOP);
-
-    // Resume
+    // 7. Configure & Start TCB
+    f_tcb.tcb_configure(f_cnode, f_vspace, f_utcb_frame, f_trapframe, f_kstack);
+    f_tcb.tcb_set_priority(255);
+    f_tcb.tcb_set_registers(rights::ALL as usize, entry_point, FACTOTUM_STACK_TOP);
     f_tcb.tcb_resume();
-    println!("Factotum started!");
+    log!("Factotum started!");
 
-    // 10. Start other components via Factotum
-
-    // First, tell Factotum about the resources we transferred
-    // We transferred (dest_slot - 100) caps starting at 100.
+    // 8. Initialize Factotum Resources
     let untyped_count = dest_slot - 100;
-    let msg_tag = MsgTag::new(protocol::INIT_RESOURCES, 2);
-    let args = [100, untyped_count, 0, 0, 0, 0];
-    f_endpoint.ipc_call(msg_tag, &args);
-    println!("Sent INIT_RESOURCES to Factotum");
+    let msg_tag = MsgTag::new(protocol::FACTOTUM_PROTO, 3);
+    let args = [protocol::INIT_RESOURCES, 100, untyped_count, 0, 0, 0, 0];
+    f_endpoint.ipc_call(msg_tag, args);
 
-    // Send INIT_IRQ
-    let msg_tag = MsgTag::new(protocol::INIT_IRQ, 2);
-    let args = [irq_start_slot, irq_count, 0, 0, 0, 0];
-    f_endpoint.ipc_call(msg_tag, &args);
-    println!("Sent INIT_IRQ to Factotum");
+    let msg_tag = MsgTag::new(protocol::FACTOTUM_PROTO, 3);
+    let args = [protocol::INIT_IRQ, irq_start_slot, irq_count, 0, 0, 0, 0];
+    f_endpoint.ipc_call(msg_tag, args);
 
-    // Iterate over other initrd entries
-    for entry in initrd.entries.iter() {
-        if entry.name == "factotum" || entry.name == "manifest" {
-            continue;
-        }
+    (f_endpoint, manifest_frame, manifest)
+}
 
-        println!("Spawning component: {}", entry.name);
-
-        let _ = &initrd_slice[entry.offset..entry.offset + entry.size];
-
-        // SPAWN
-        let ipc_buf = glenda::ipc::utcb::get_ipc_buffer();
-        ipc_buf.clear();
-        ipc_buf.append_str(&entry.name);
-
-        let msg_tag = MsgTag::new(protocol::SPAWN, 2);
-        let args = [entry.name.len(), 0, 0, 0, 0, 0];
-        f_endpoint.ipc_call(msg_tag, &args);
-        let pid = UTCB::current().mrs_regs[0];
-
-        if pid == usize::MAX {
-            println!("Failed to spawn {}", entry.name);
-            continue;
-        }
-        println!("  PID: {}", pid);
-
-        // PROCESS_LOAD_IMAGE
-        // We use the Initrd Cap which we know is at Slot 4 in Factotum's CSpace.
-        // We pass '4' as the frame_cap argument.
-        // args: [pid, frame_cap, offset, len, load_addr]
-        let msg_tag = MsgTag::new(protocol::PROCESS_LOAD_IMAGE, 5);
-        let args = [pid, 4, entry.offset, entry.size, 0x10000, 0];
-
-        f_endpoint.ipc_call(msg_tag, &args);
-        let ret = UTCB::current().mrs_regs[0];
-        if ret != 0 {
-            println!("Failed to load image for {}", entry.name);
-            continue;
-        }
-
-        // If Unicorn, load manifest
-        if entry.name == "unicorn" && manifest_entry.is_some() {
-            let m_entry = manifest_entry.unwrap();
-            println!("  Loading manifest for Unicorn...");
-            let msg_tag = MsgTag::new(protocol::PROCESS_LOAD_IMAGE, 5);
-            // frame_cap = 200 (Manifest Frame in Factotum CSpace)
-            // Load at 0x2000_0000
-            let args = [pid, 200, 0, m_entry.size, 0x2000_0000, 0];
-            f_endpoint.ipc_call(msg_tag, &args);
-        }
-
-        // PROCESS_START
-        // Entry point 0x10000, Stack 0x80000000
-        let msg_tag = MsgTag::new(protocol::PROCESS_START, 3);
-        let args = [pid, 0x10000, 0x8000_0000, 0, 0, 0];
-        f_endpoint.ipc_call(msg_tag, &args);
-        println!("  Started {}", entry.name);
+fn spawn_services(f_endpoint: CapPtr, manifest: &Manifest, manifest_frame: Option<CapPtr>) {
+    // 1. Send Manifest Frame to Factotum
+    if let Some(frame) = manifest_frame {
+        let utcb = UTCB::current();
+        utcb.clear();
+        utcb.cap_transfer = frame;
+        let mut tag = MsgTag::new(protocol::FACTOTUM_PROTO, 1);
+        tag.set_has_cap();
+        f_endpoint.ipc_call(tag, [protocol::INIT_MANIFEST, 0, 0, 0, 0, 0, 0]);
+        log!("Sent manifest frame to Factotum");
     }
 
-    loop {}
+    for (i, entry) in manifest.service.iter().enumerate() {
+        log!("Spawning component from manifest: {} (binary: {})", entry.name, entry.binary);
+
+        let utcb = UTCB::current();
+        utcb.clear();
+        
+        let tag = MsgTag::new(protocol::FACTOTUM_PROTO, 1);
+        let args = [protocol::SPAWN_SERVICE_MANIFEST, i, 0, 0, 0, 0, 0];
+        f_endpoint.ipc_call(tag, args);
+
+        let pid = UTCB::current().mrs_regs[0];
+        if pid == usize::MAX {
+            log!("Failed to spawn {}", entry.name);
+            continue;
+        }
+        log!("  PID: {}", pid);
+    }
+}
+
+fn monitor(monitor_ep: CapPtr) -> ! {
+    log!("Entering monitor loop...");
+    loop {
+        let badge = monitor_ep.ipc_recv();
+        let utcb = UTCB::current();
+        let tag = utcb.msg_tag;
+        let label = tag.label();
+
+        log!("Received message! Badge: {}, Label: {:#x}, Length: {}", badge, label, tag.length());
+
+        // Handle faults (0xFFFF = Page Fault, 0xFFFE = Exception)
+        if label == 0xFFFF || label == 0xFFFE {
+            let scause = utcb.mrs_regs[0];
+            let stval = utcb.mrs_regs[1];
+            let sepc = utcb.mrs_regs[2];
+            log!(
+                "FAULT from badge {}: scause={:#x}, stval={:#x}, sepc={:#x}",
+                badge,
+                scause,
+                stval,
+                sepc
+            );
+            // For now, just loop or kill. In a real OS, we might restart the service.
+        }
+    }
 }
