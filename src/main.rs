@@ -20,6 +20,7 @@ const FACTOTUM_STACK_TOP: usize = 0x8000_0000;
 const FACTOTUM_UTCB_ADDR: usize = 0x7FFF_F000;
 const FACTOTUM_LOAD_ADDR: usize = 0x10000;
 
+// TODO: Refactor this
 #[unsafe(no_mangle)]
 fn main() -> ! {
     // Initialize logging
@@ -55,6 +56,14 @@ fn main() -> ! {
 
     println!("Found Factotum. Size: {}", factotum_data.len());
 
+    // Find Manifest
+    let manifest_entry = initrd.entries.iter().find(|e| e.name == "drivers-manifest");
+    let manifest_data = if let Some(entry) = manifest_entry {
+        Some(&initrd_slice[entry.offset..entry.offset + entry.size])
+    } else {
+        None
+    };
+
     // 2. Init Manager
     let mut rm = ResourceManager::new(bootinfo);
 
@@ -65,6 +74,13 @@ fn main() -> ! {
     let f_endpoint = rm.alloc_object(CapType::Endpoint, 0).expect("Failed to alloc Endpoint");
     let f_utcb_frame = rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc UTCB Frame");
     let f_stack_frame = rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc Stack Frame");
+
+    // Allocate Manifest Frame if needed
+    let manifest_frame = if manifest_data.is_some() {
+        Some(rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc Manifest Frame"))
+    } else {
+        None
+    };
 
     // 4. Setup Factotum CSpace
     // Slot 0: CSpace
@@ -84,6 +100,24 @@ fn main() -> ! {
 
     // Slot 10: Endpoint (For listening)
     f_cnode.cnode_mint(f_endpoint, 10, 0, rights::ALL);
+
+    // Copy Manifest Data
+    if let (Some(frame), Some(data)) = (manifest_frame, manifest_data) {
+        vspace.pagetable_map(frame, SCRATCH_VA, perms::READ | perms::WRITE);
+        let scratch_ptr = SCRATCH_VA as *mut u8;
+        unsafe {
+            scratch_ptr.write_bytes(0, 4096);
+            core::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                scratch_ptr,
+                core::cmp::min(4096, data.len()),
+            );
+        }
+        vspace.pagetable_unmap(SCRATCH_VA);
+
+        // Put in Factotum CSpace at slot 200
+        f_cnode.cnode_mint(frame, 200, 0, rights::READ);
+    }
 
     // 5. Load Flat Binary
     let load_addr = FACTOTUM_LOAD_ADDR;
@@ -180,7 +214,7 @@ fn main() -> ! {
 
     // Iterate over other initrd entries
     for entry in initrd.entries.iter() {
-        if entry.name == "factotum" {
+        if entry.name == "factotum" || entry.name == "drivers-manifest" {
             continue;
         }
 
@@ -216,6 +250,17 @@ fn main() -> ! {
         if ret != 0 {
             println!("Failed to load image for {}", entry.name);
             continue;
+        }
+
+        // If Unicorn, load manifest
+        if entry.name == "unicorn" && manifest_entry.is_some() {
+            let m_entry = manifest_entry.unwrap();
+            println!("  Loading manifest for Unicorn...");
+            let msg_tag = MsgTag::new(protocol::PROCESS_LOAD_IMAGE, 5);
+            // frame_cap = 200 (Manifest Frame in Factotum CSpace)
+            // Load at 0x2000_0000
+            let args = [pid, 200, 0, m_entry.size, 0x2000_0000, 0];
+            f_endpoint.ipc_call(msg_tag, &args);
         }
 
         // PROCESS_START
