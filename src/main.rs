@@ -6,9 +6,9 @@ extern crate alloc;
 use glenda::bootinfo::{BOOTINFO_VA, BootInfo, CONSOLE_CAP, INITRD_CAP, INITRD_VA};
 use glenda::cap::pagetable::perms;
 use glenda::cap::{CapPtr, CapType, rights};
+use glenda::console;
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
-use glenda::console;
 use glenda::println;
 use glenda::protocol::factotum as protocol;
 
@@ -57,7 +57,7 @@ fn main() -> ! {
     println!("Found Factotum. Size: {}", factotum_data.len());
 
     // Find Manifest
-    let manifest_entry = initrd.entries.iter().find(|e| e.name == "drivers-manifest");
+    let manifest_entry = initrd.entries.iter().find(|e| e.name == "manifest");
     let manifest_data = if let Some(entry) = manifest_entry {
         Some(&initrd_slice[entry.offset..entry.offset + entry.size])
     } else {
@@ -214,7 +214,7 @@ fn main() -> ! {
 
     // Iterate over other initrd entries
     for entry in initrd.entries.iter() {
-        if entry.name == "factotum" || entry.name == "drivers-manifest" {
+        if entry.name == "factotum" || entry.name == "manifest" {
             continue;
         }
 
