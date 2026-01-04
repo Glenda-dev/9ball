@@ -129,6 +129,8 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> CapPtr {
     f_cnode.cnode_copy(CapPtr(CONSOLE_SLOT), CONSOLE_SLOT, rights::ALL);
     f_cnode.cnode_mint(f_endpoint, 10, 0, rights::ALL);
 
+    //f_cnode.cnode_debug_print();
+
     // 4. Set 9ball as Factotum's fault handler
     f_tcb.tcb_set_fault_handler(monitor_ep);
 
