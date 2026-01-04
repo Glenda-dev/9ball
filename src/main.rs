@@ -7,11 +7,10 @@ use glenda::bootinfo::{BOOTINFO_VA, BootInfo, CONSOLE_CAP, INITRD_CAP, INITRD_VA
 use glenda::cap::pagetable::perms;
 use glenda::cap::{CapPtr, CapType, rights};
 use glenda::console;
-use glenda::elf::{ElfFile, PF_R, PF_W, PF_X, PT_LOAD};
+use glenda::elf::{ElfFile, PF_W, PF_X, PT_LOAD};
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
 use glenda::manifest::Manifest;
-use glenda::println;
 use glenda::protocol::factotum as protocol;
 
 mod manager;
@@ -38,17 +37,6 @@ fn main() -> ! {
     let bootinfo = unsafe { &*(BOOTINFO_VA as *const BootInfo) };
     log!("BootInfo Magic: {:#x}", bootinfo.magic);
 
-    // Map Initrd Frame
-    let vspace = CapPtr(1);
-    let initrd_frame = CapPtr(INITRD_CAP);
-
-    let ret = vspace.pagetable_map(initrd_frame, INITRD_VA, perms::READ);
-    if ret != 0 {
-        log!("Failed to map initrd: error code {}", ret);
-        loop {}
-    }
-    log!("Initrd mapped at {:#x}", INITRD_VA);
-
     let total_size_ptr = (INITRD_VA + 8) as *const u32;
     let total_size = unsafe { *total_size_ptr } as usize;
 
@@ -59,7 +47,7 @@ fn main() -> ! {
     let mut rm = ResourceManager::new(bootinfo);
 
     // 2. Start Factotum
-    let (f_endpoint, manifest_frame, manifest) = start_factotum(&mut rm, &initrd, initrd_slice);
+    let (f_endpoint, manifest_frame, manifest) = start_factotum(&mut rm, &initrd);
 
     // 3. Start other components via Factotum
     spawn_services(f_endpoint, &manifest, manifest_frame);
@@ -68,29 +56,22 @@ fn main() -> ! {
     monitor(CapPtr(11)); // 9ball's own endpoint
 }
 
-fn start_factotum(
-    rm: &mut ResourceManager,
-    initrd: &Initrd,
-    initrd_slice: &[u8],
-) -> (CapPtr, Option<CapPtr>, Manifest) {
+fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> (CapPtr, Option<CapPtr>, Manifest) {
     let vspace = CapPtr(1);
 
     // 1. Find Factotum
-    let factotum_entry =
-        initrd.entries.iter().find(|e| e.name == "factotum").expect("Factotum not found in initrd");
-    let factotum_data =
-        &initrd_slice[factotum_entry.offset..factotum_entry.offset + factotum_entry.size];
+    let factotum_data = initrd.get_file("factotum").expect("Factotum not found in initrd");
 
-    log!("Found Factotum. Size: {}", factotum_data.len());
+    log!("Found Factotum. Size: {} KB", factotum_data.len() / 1024);
 
     // Find Manifest
-    let manifest_entry = initrd.entries.iter().find(|e| e.name == "manifest");
-    let manifest = if let Some(entry) = manifest_entry {
-        let data = &initrd_slice[entry.offset..entry.offset + entry.size];
+    let manifest = if let Some(data) = initrd.get_file("manifest") {
         Manifest::parse(data)
     } else {
         Manifest { service: alloc::vec::Vec::new(), driver: alloc::vec::Vec::new() }
     };
+
+    let manifest_entry = initrd.entries.iter().find(|e| e.name == "manifest");
 
     // 2. Allocate Factotum Resources
     let f_cnode = rm.alloc_object(CapType::CNode, 12).expect("Failed to alloc CNode");
@@ -128,8 +109,8 @@ fn start_factotum(
     f_tcb.tcb_set_fault_handler(monitor_ep);
 
     // Copy Manifest Data
-    if let (Some(frame), Some(entry)) = (manifest_frame, manifest_entry) {
-        let data = &initrd_slice[entry.offset..entry.offset + entry.size];
+    if let (Some(frame), Some(_entry)) = (manifest_frame, manifest_entry) {
+        let data = initrd.get_file("manifest").unwrap();
         vspace.pagetable_map(frame, SCRATCH_VA, perms::READ | perms::WRITE);
         let scratch_ptr = SCRATCH_VA as *mut u8;
         unsafe {
