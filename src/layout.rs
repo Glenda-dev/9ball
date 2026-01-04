@@ -6,13 +6,15 @@ pub const INITRD_VA: usize = RES_VA_BASE + PGSIZE;
 /// Virtual Address where BootInfo is mapped in Root Task
 pub const BOOTINFO_VA: usize = RES_VA_BASE;
 
+pub const SCRATCH_VA: usize = 0x5000_0000; // 临时映射页，用于 ELF 加载
+
 /// Capability Slot for Console
-pub const CONSOLE_SLOT: usize = 6;
+pub const CONSOLE_SLOT: usize = 7;
 
 /// Capability Slot for Initrd Frame
-pub const INITRD_SLOT: usize = 7;
+pub const INITRD_SLOT: usize = 8;
 
 /// DTB Slot
-pub const DTB_SLOT: usize = 8;
+pub const DTB_SLOT: usize = 9;
 
-pub const MONITOR_SLOT: usize = 9;
+pub const MONITOR_SLOT: usize = 10;
