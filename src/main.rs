@@ -149,7 +149,7 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> CapPtr {
 
     // 6. Transfer Remaining Untyped & IRQ
     let mut dest_slot = 100;
-    while rm.untyped_slots.start.0 <= rm.untyped_slots.end.0 {
+    while rm.untyped_slots.start.0 < rm.untyped_slots.end.0 {
         let cap = rm.untyped_slots.start;
         rm.untyped_slots.start.0 += 1;
         f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
@@ -157,7 +157,7 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> CapPtr {
     }
     log!("Transferred {} untyped caps to Factotum", dest_slot - 100);
 
-    while rm.mmio_slots.start.0 <= rm.mmio_slots.end.0 {
+    while rm.mmio_slots.start.0 < rm.mmio_slots.end.0 {
         let cap = rm.mmio_slots.start;
         rm.mmio_slots.start.0 += 1;
         f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
