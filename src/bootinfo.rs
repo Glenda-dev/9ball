@@ -7,7 +7,7 @@ pub const BOOTINFO_MAGIC: u32 = 0x99999999;
 pub const BOOTINFO_SIZE: usize = 4096;
 
 /// Maximum number of untyped memory regions we can describe
-pub const MAX_UNTYPED_REGIONS: usize = 16;
+pub const MAX_UNTYPED_REGIONS: usize = 64;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

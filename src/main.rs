@@ -67,9 +67,19 @@ fn main() -> ! {
 fn print_bootinfo(bootinfo: &BootInfo) {
     log!("BootInfo Magic: {:#x}", bootinfo.magic);
     log!("BootInfo DTB: Address = {:#x}, Size = {}", bootinfo.dtb_paddr, bootinfo.dtb_size);
-    log!("BootInfo MMIO: {:?} - {:?}", bootinfo.mmio.start, bootinfo.mmio.end);
-    log!("BootInfo Untypes: {:?} - {:?}", bootinfo.untyped.start, bootinfo.untyped.end);
-    log!("BootInfo IRQS: {:?} - {:?}", bootinfo.irq.start, bootinfo.irq.end);
+    log!(
+        "BootInfo MMIOs: Count = {}, [{:?},{:?})",
+        bootinfo.mmio_count,
+        bootinfo.mmio.start,
+        bootinfo.mmio.end
+    );
+    log!(
+        "BootInfo Untypes: Count = {}, [{:?},{:?})",
+        bootinfo.untyped_count,
+        bootinfo.untyped.start,
+        bootinfo.untyped.end
+    );
+    log!("BootInfo IRQS: [{:?},{:?})", bootinfo.irq.start, bootinfo.irq.end);
 }
 
 fn parse_manifest(initrd: &Initrd) -> Manifest {
