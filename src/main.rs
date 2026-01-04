@@ -201,6 +201,9 @@ fn map_elf(rm: &mut ResourceManager, vspace: CapPtr, elf_data: &[u8]) -> usize {
     let my_vspace = CapPtr(VSPACE_SLOT);
 
     for phdr in elf.program_headers() {
+        if phdr.p_type != PT_LOAD {
+            continue;
+        }
         log!(
             "Mapping ELF Segment: vaddr={:#x}, memsz={}, filesz={}, offset={:#x}",
             phdr.p_vaddr,
