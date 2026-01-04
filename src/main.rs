@@ -177,7 +177,7 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> CapPtr {
 
     // 7. Configure & Start TCB
     f_tcb.tcb_configure(f_cnode, f_vspace, f_utcb_frame, f_trapframe, f_kstack);
-    f_tcb.tcb_set_priority(255);
+    f_tcb.tcb_set_priority(254);
     f_tcb.tcb_set_registers(rights::ALL as usize, entry_point, STACK_VA);
     f_tcb.tcb_resume();
     log!("Factotum started!");
