@@ -1,5 +1,5 @@
 use crate::bootinfo::{BootInfo, SlotRegion};
-use glenda::cap::{CapPtr, CapType};
+use glenda::cap::{CSPACE_SLOT, CapPtr, CapType};
 
 pub struct ResourceManager {
     pub cnode: CapPtr, // Root Task CNode
@@ -10,7 +10,7 @@ pub struct ResourceManager {
 impl ResourceManager {
     pub fn new(bootinfo: &BootInfo) -> Self {
         Self {
-            cnode: CapPtr(0), // Root Task CNode is always 0 (implied)
+            cnode: CapPtr(CSPACE_SLOT), // Root Task CNode is always 0 (implied)
             empty_slots: bootinfo.empty,
             untyped_slots: bootinfo.untyped,
         }
@@ -29,9 +29,9 @@ impl ResourceManager {
     // Simple allocator: just takes the next untyped and retypes it completely
     // In a real system, we would split untyped memory.
     // Here we assume we have enough small untyped objects or we waste them.
-    pub fn alloc_object(&mut self, obj_type: CapType, size_bits: usize) -> Option<CapPtr> {
+    pub fn alloc_object(&mut self, obj_type: CapType, pages: usize) -> Option<CapPtr> {
         // Find an untyped cap
-        if self.untyped_slots.start.0 >= self.untyped_slots.end.0 {
+        if self.untyped_slots.start.0 > self.untyped_slots.end.0 {
             return None;
         }
 
@@ -40,13 +40,11 @@ impl ResourceManager {
         // This is VERY wasteful but sufficient for a demo.
         let untyped_cap = self.untyped_slots.start;
 
-        let dest_slot = self.alloc_slot().expect("Failed to alloc slot");
-        let dest_cap = dest_slot;
+        let dest_cap = self.alloc_slot().expect("Failed to alloc slot");
 
         // Retype
-        // Note: untyped_retype(obj_type, size_bits, n_objs, dest_cnode, dest_offset)
-        // dest_cnode is our cspace (0), dest_offset is the slot index.
-        let ret = untyped_cap.untyped_retype(obj_type, size_bits, 1, self.cnode, dest_slot.0);
+        // Note: untyped_retype(obj_type, pagesobjs, dest_cnode, dest_offset)
+        let ret = untyped_cap.untyped_retype(obj_type, pages, 1, self.cnode, dest_cap, false);
 
         if ret == 0 { Some(dest_cap) } else { None }
     }
