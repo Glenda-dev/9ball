@@ -3,7 +3,6 @@
 
 extern crate alloc;
 
-use glenda::bootinfo::{BOOTINFO_VA, BootInfo, CONSOLE_CAP, INITRD_CAP, INITRD_VA};
 use glenda::cap::pagetable::perms;
 use glenda::cap::{CapPtr, CapType, rights};
 use glenda::console;
@@ -11,14 +10,19 @@ use glenda::elf::{ElfFile, PF_W, PF_X, PT_LOAD};
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
 use glenda::manifest::Manifest;
+use glenda::mem::{STACK_SIZE, STACK_VA, TRAPFRAME_VA, UTCB_VA};
 use glenda::protocol::factotum as protocol;
 
+mod bootinfo;
+mod layout;
 mod manager;
+
+use bootinfo::BootInfo;
+use layout::{BOOTINFO_VA, CONSOLE_SLOT, INITRD_SLOT, INITRD_VA};
 use manager::ResourceManager;
 
-const SCRATCH_VA: usize = 0x5000_0000;
-const FACTOTUM_STACK_TOP: usize = 0x8000_0000;
-const FACTOTUM_UTCB_ADDR: usize = 0x7FFF_F000;
+use crate::layout::MONITOR_SLOT;
+
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => ({
@@ -30,12 +34,12 @@ macro_rules! log {
 #[unsafe(no_mangle)]
 fn main() -> ! {
     // Initialize logging
-    console::init(CapPtr(CONSOLE_CAP));
+    console::init(CapPtr(CONSOLE_SLOT));
 
     log!("Hello from 9ball (Root Task)!");
 
     let bootinfo = unsafe { &*(BOOTINFO_VA as *const BootInfo) };
-    log!("BootInfo Magic: {:#x}", bootinfo.magic);
+    print_bootinfo(&bootinfo);
 
     let total_size_ptr = (INITRD_VA + 8) as *const u32;
     let total_size = unsafe { *total_size_ptr } as usize;
@@ -46,30 +50,46 @@ fn main() -> ! {
     // 1. Init Manager
     let mut rm = ResourceManager::new(bootinfo);
 
+    let manifest = parse_manifest(&initrd);
+
     // 2. Start Factotum
-    let (f_endpoint, manifest_frame, manifest) = start_factotum(&mut rm, &initrd);
+    let f_endpoint = start_factotum(&mut rm, &initrd, &manifest);
 
     // 3. Start other components via Factotum
-    spawn_services(f_endpoint, &manifest, manifest_frame);
+    spawn_services(f_endpoint, &manifest);
 
     // 4. Enter Monitor Loop
-    monitor(CapPtr(11)); // 9ball's own endpoint
+    monitor(CapPtr(MONITOR_SLOT)); // 9ball's own endpoint
 }
 
-fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> (CapPtr, Option<CapPtr>, Manifest) {
-    let vspace = CapPtr(1);
+fn print_bootinfo(bootinfo: &BootInfo) {
+    log!("BootInfo Magic: {:#x}", bootinfo.magic);
+    log!("BootInfo DTB: Address = {:#x}, Size = {}", bootinfo.dtb_paddr, bootinfo.dtb_size);
+    log!("BootInfo MMIO: {:?} - {:?}", bootinfo.mmio.start, bootinfo.mmio.end);
+    log!("BootInfo Untypes: {:?} - {:?}", bootinfo.untyped.start, bootinfo.untyped.end);
+    log!("BootInfo IRQS: {:?} - {:?}", bootinfo.irq.start, bootinfo.irq.end);
+}
 
-    // 1. Find Factotum
-    let factotum_data = initrd.get_file("factotum").expect("Factotum not found in initrd");
-
-    log!("Found Factotum. Size: {} KB", factotum_data.len() / 1024);
-
+fn parse_manifest(initrd: &Initrd) -> Manifest {
     // Find Manifest
     let manifest = if let Some(data) = initrd.get_file("manifest") {
         Manifest::parse(data)
     } else {
-        Manifest { service: alloc::vec::Vec::new(), driver: alloc::vec::Vec::new() }
+        panic!("Manifest not found in initrd")
     };
+    log!(
+        "Load manifest with {} services and {} drivers",
+        manifest.service.len(),
+        manifest.driver.len()
+    );
+    manifest
+}
+
+fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd, manifest: &Manifest) -> CapPtr {
+    // 1. Find Factotum
+    let factotum_data = initrd.get_file("factotum").expect("Factotum not found in initrd");
+
+    log!("Found Factotum. Size: {} KB", factotum_data.len() / 1024);
 
     let manifest_entry = initrd.entries.iter().find(|e| e.name == "manifest");
 
@@ -88,42 +108,17 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> (CapPtr, Option<
     // Mint into 9ball's own CSpace (Slot 11)
     CapPtr(0).cnode_mint(monitor_ep, 11, 0, rights::ALL);
 
-    // Allocate Manifest Frame if needed
-    let manifest_frame = if manifest_entry.is_some() {
-        Some(rm.alloc_object(CapType::Frame, 0).expect("Failed to alloc Manifest Frame"))
-    } else {
-        None
-    };
-
     // 3. Setup Factotum CSpace
     f_cnode.cnode_mint(f_cnode, 0, 0, rights::ALL);
     f_cnode.cnode_mint(f_vspace, 1, 0, rights::ALL);
     f_cnode.cnode_mint(f_tcb, 2, 0, rights::ALL);
     f_cnode.cnode_mint(f_utcb_frame, 3, 0, rights::ALL);
-    f_cnode.cnode_copy(CapPtr(INITRD_CAP), 4, rights::READ);
-    f_cnode.cnode_copy(CapPtr(glenda::bootinfo::BOOTINFO_SLOT), 9, rights::READ);
-    f_cnode.cnode_copy(CapPtr(CONSOLE_CAP), 8, rights::ALL);
+    f_cnode.cnode_copy(CapPtr(INITRD_SLOT), 4, rights::READ);
+    f_cnode.cnode_copy(CapPtr(CONSOLE_SLOT), 8, rights::ALL);
     f_cnode.cnode_mint(f_endpoint, 10, 0, rights::ALL);
 
     // 4. Set 9ball as Factotum's fault handler
     f_tcb.tcb_set_fault_handler(monitor_ep);
-
-    // Copy Manifest Data
-    if let (Some(frame), Some(_entry)) = (manifest_frame, manifest_entry) {
-        let data = initrd.get_file("manifest").unwrap();
-        vspace.pagetable_map(frame, SCRATCH_VA, perms::READ | perms::WRITE);
-        let scratch_ptr = SCRATCH_VA as *mut u8;
-        unsafe {
-            scratch_ptr.write_bytes(0, 4096);
-            core::ptr::copy_nonoverlapping(
-                data.as_ptr(),
-                scratch_ptr,
-                core::cmp::min(4096, data.len()),
-            );
-        }
-        vspace.pagetable_unmap(SCRATCH_VA);
-        f_cnode.cnode_mint(frame, 200, 0, rights::READ);
-    }
 
     // 4. Load ELF Binary
     let elf = ElfFile::new(factotum_data).expect("Factotum is not a valid ELF");
@@ -141,43 +136,20 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> (CapPtr, Option<
 
         let pages = (mem_size + 4095) / 4096;
         for i in 0..pages {
-            let page_vaddr = (vaddr & !4095) + i * 4096;
-            let frame = rm.alloc_object(CapType::Frame, 0).expect("OOM loading ELF");
-            vspace.pagetable_map(frame, SCRATCH_VA, perms::READ | perms::WRITE);
-            let scratch_ptr = SCRATCH_VA as *mut u8;
-            unsafe { scratch_ptr.write_bytes(0, 4096) };
-
-            let copy_start = core::cmp::max(vaddr, page_vaddr);
-            let copy_end = core::cmp::min(vaddr + file_size, page_vaddr + 4096);
-
-            if copy_start < copy_end {
-                let src_offset = offset + (copy_start - vaddr);
-                let dst_offset = copy_start - page_vaddr;
-                let copy_len = copy_end - copy_start;
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        factotum_data.as_ptr().add(src_offset),
-                        scratch_ptr.add(dst_offset),
-                        copy_len,
-                    );
-                }
-            }
-            vspace.pagetable_unmap(SCRATCH_VA);
-
-            let mut flags = perms::READ;
-            if phdr.p_flags & PF_W != 0 {
-                flags |= perms::WRITE;
-            }
-            if phdr.p_flags & PF_X != 0 {
-                flags |= perms::EXECUTE;
-            }
-            f_vspace.pagetable_map(frame, page_vaddr, flags);
+            unimplemented!()
         }
     }
 
-    // 5. Setup Stack & UTCB
-    f_vspace.pagetable_map(f_stack_frame, FACTOTUM_STACK_TOP - 4096, perms::READ | perms::WRITE);
-    f_vspace.pagetable_map(f_utcb_frame, FACTOTUM_UTCB_ADDR, perms::READ | perms::WRITE);
+    // 5. Setup Stack, UTCB and TrapFrame
+    map_with_alloc(
+        f_vspace,
+        f_stack_frame,
+        STACK_VA - STACK_SIZE,
+        perms::READ | perms::WRITE | perms::USER,
+    );
+    map_with_alloc(f_vspace, f_utcb_frame, UTCB_VA, perms::READ | perms::WRITE | perms::USER);
+    map_with_alloc(f_vspace, f_trapframe, TRAPFRAME_VA, perms::READ | perms::WRITE);
+    f_vspace.pagetable_map_trampoline();
 
     // 6. Transfer Remaining Untyped & IRQ
     let mut dest_slot = 100;
@@ -202,7 +174,7 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> (CapPtr, Option<
     // 7. Configure & Start TCB
     f_tcb.tcb_configure(f_cnode, f_vspace, f_utcb_frame, f_trapframe, f_kstack);
     f_tcb.tcb_set_priority(255);
-    f_tcb.tcb_set_registers(rights::ALL as usize, entry_point, FACTOTUM_STACK_TOP);
+    f_tcb.tcb_set_registers(rights::ALL as usize, entry_point, STACK_VA);
     f_tcb.tcb_resume();
     log!("Factotum started!");
 
@@ -216,21 +188,14 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> (CapPtr, Option<
     let args = [protocol::INIT_IRQ, irq_start_slot, irq_count, 0, 0, 0, 0];
     f_endpoint.ipc_call(msg_tag, args);
 
-    (f_endpoint, manifest_frame, manifest)
+    f_endpoint
 }
 
-fn spawn_services(f_endpoint: CapPtr, manifest: &Manifest, manifest_frame: Option<CapPtr>) {
-    // 1. Send Manifest Frame to Factotum
-    if let Some(frame) = manifest_frame {
-        let utcb = UTCB::current();
-        utcb.clear();
-        utcb.cap_transfer = frame;
-        let mut tag = MsgTag::new(protocol::FACTOTUM_PROTO, 1);
-        tag.set_has_cap();
-        f_endpoint.ipc_call(tag, [protocol::INIT_MANIFEST, 0, 0, 0, 0, 0, 0]);
-        log!("Sent manifest frame to Factotum");
-    }
+fn map_with_alloc(vspace: CapPtr, frame: CapPtr, va: usize, perms: usize) {
+    unimplemented!()
+}
 
+fn spawn_services(f_endpoint: CapPtr, manifest: &Manifest) {
     for (i, entry) in manifest.service.iter().enumerate() {
         log!("Spawning component from manifest: {} (binary: {})", entry.name, entry.binary);
 

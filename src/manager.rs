@@ -1,4 +1,4 @@
-use glenda::bootinfo::{BootInfo, SlotRegion};
+use crate::bootinfo::{BootInfo, SlotRegion};
 use glenda::cap::{CapPtr, CapType};
 
 pub struct ResourceManager {
@@ -39,9 +39,8 @@ impl ResourceManager {
         // and don't manage the remaining space in it.
         // This is VERY wasteful but sufficient for a demo.
         let untyped_cap = self.untyped_slots.start;
-        self.untyped_slots.start.0 += 1;
 
-        let dest_slot = self.alloc_slot()?;
+        let dest_slot = self.alloc_slot().expect("Failed to alloc slot");
         let dest_cap = dest_slot;
 
         // Retype
