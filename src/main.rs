@@ -82,14 +82,14 @@ fn print_bootinfo(bootinfo: &BootInfo) {
 fn parse_manifest(initrd: &Initrd) -> Manifest {
     // Find Manifest
     let manifest = if let Some(data) = initrd.get_file("manifest") {
-        Manifest::parse(data)
+        Manifest::parse(data).expect("Failed to parse manifest")
     } else {
         panic!("Manifest not found in initrd")
     };
     log!(
         "Load manifest with {} services and {} drivers",
-        manifest.service.len(),
-        manifest.driver.len()
+        manifest.services.len(),
+        manifest.drivers.len()
     );
     manifest
 }
@@ -319,7 +319,7 @@ fn map_with_alloc(
 }
 
 fn spawn_services(f_endpoint: Endpoint, manifest: &Manifest) {
-    for (i, entry) in manifest.service.iter().enumerate() {
+    for (i, entry) in manifest.services.iter().enumerate() {
         log!("Spawning component from manifest: {} (binary: {})", entry.name, entry.binary);
 
         let utcb = UTCB::current();
