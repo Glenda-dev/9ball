@@ -124,7 +124,6 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> Endpoint {
     // Mint into 9ball's own CSpace (Slot 11)
 
     let cspace = CSPACE_CAP;
-    cspace.debug_print();
 
     cspace.mint(monitor_ep.cap(), 11, 0, rights::ALL);
 
@@ -136,8 +135,6 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> Endpoint {
     f_cnode.copy(INITRD_CAP.cap(), INITRD_SLOT, rights::READ);
     f_cnode.copy(CONSOLE_CAP.cap(), CONSOLE_SLOT, rights::ALL);
     f_cnode.mint(f_endpoint.cap(), 10, 0, rights::ALL);
-
-    f_cnode.debug_print();
 
     // 4. Set 9ball as Factotum's fault handler
     f_tcb.set_fault_handler(monitor_ep);
