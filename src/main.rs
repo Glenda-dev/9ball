@@ -341,7 +341,7 @@ fn spawn_services(f_endpoint: Endpoint, manifest: &Manifest) {
 fn monitor(monitor_ep: Endpoint) -> ! {
     log!("Entering monitor loop...");
     loop {
-        let badge = monitor_ep.recv();
+        let badge = monitor_ep.recv(0);
         let utcb = UTCB::current();
         let tag = utcb.msg_tag;
         let label = tag.label();
