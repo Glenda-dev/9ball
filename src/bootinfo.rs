@@ -56,8 +56,8 @@ pub struct BootInfo {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SlotRegion {
-    pub start: CapPtr,
-    pub end: CapPtr,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[repr(C)]
@@ -76,10 +76,10 @@ impl BootInfo {
             magic: BOOTINFO_MAGIC,
             dtb_paddr: 0,
             dtb_size: 0,
-            empty: SlotRegion { start: CapPtr(0), end: CapPtr(0) },
-            untyped: SlotRegion { start: CapPtr(0), end: CapPtr(0) },
-            irq: SlotRegion { start: CapPtr(0), end: CapPtr(0) },
-            mmio: SlotRegion { start: CapPtr(0), end: CapPtr(0) },
+            empty: SlotRegion { start: 0, end: 0 },
+            untyped: SlotRegion { start: 0, end: 0 },
+            irq: SlotRegion { start: 0, end: 0 },
+            mmio: SlotRegion { start: 0, end: 0 },
             untyped_count: 0,
             untyped_list: [UntypedDesc { paddr: 0, size: 0 }; MAX_UNTYPED_REGIONS],
             mmio_count: 0,

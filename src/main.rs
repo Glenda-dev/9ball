@@ -3,9 +3,17 @@
 
 extern crate alloc;
 
-use glenda::cap::pagetable::perms;
-use glenda::cap::{CSPACE_SLOT, CapPtr, CapType, TCB_SLOT, UTCB_SLOT, VSPACE_SLOT, rights};
-use glenda::console;
+mod bootinfo;
+mod layout;
+mod manager;
+
+use crate::layout::{INITRD_CAP, MONITOR_CAP};
+use bootinfo::BootInfo;
+use glenda::cap::pagetable::{Perms, perms};
+use glenda::cap::{
+    CNode, CONSOLE_CAP, CONSOLE_SLOT, CSPACE_CAP, CSPACE_SLOT, CapPtr, CapType, Endpoint, Frame,
+    PageTable, TCB, TCB_SLOT, VSPACE_CAP, VSPACE_SLOT, rights,
+};
 use glenda::elf::{ElfFile, PF_W, PF_X, PT_LOAD};
 use glenda::initrd::Initrd;
 use glenda::ipc::{MsgTag, UTCB};
@@ -14,16 +22,8 @@ use glenda::mem::{
     HEAP_PAGES, HEAP_VA, PGSIZE, STACK_PAGES, STACK_SIZE, STACK_VA, TRAPFRAME_VA, UTCB_VA,
 };
 use glenda::protocol::factotum as protocol;
-
-mod bootinfo;
-mod layout;
-mod manager;
-
-use bootinfo::BootInfo;
-use layout::{BOOTINFO_VA, CONSOLE_SLOT, INITRD_SLOT, INITRD_VA, SCRATCH_VA};
+use layout::{BOOTINFO_VA, INITRD_SLOT, INITRD_VA, SCRATCH_VA, UTCB_SLOT};
 use manager::ResourceManager;
-
-use crate::layout::MONITOR_SLOT;
 
 #[macro_export]
 macro_rules! log {
@@ -35,9 +35,6 @@ macro_rules! log {
 // TODO: Refactor this
 #[unsafe(no_mangle)]
 fn main() -> ! {
-    // Initialize logging
-    console::init(CapPtr(CONSOLE_SLOT));
-
     log!("Hello from 9ball (Root Task)!");
 
     let bootinfo = unsafe { &*(BOOTINFO_VA as *const BootInfo) };
@@ -61,7 +58,7 @@ fn main() -> ! {
     spawn_services(f_endpoint, &manifest);
 
     // 4. Enter Monitor Loop
-    monitor(CapPtr(MONITOR_SLOT)); // 9ball's own endpoint
+    monitor(MONITOR_CAP); // 9ball's own endpoint
 }
 
 fn print_bootinfo(bootinfo: &BootInfo) {
@@ -97,110 +94,117 @@ fn parse_manifest(initrd: &Initrd) -> Manifest {
     manifest
 }
 
-fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> CapPtr {
+fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> Endpoint {
     // 1. Find Factotum
     let factotum_data = initrd.get_file("factotum").expect("Factotum not found in initrd");
 
     log!("Found Factotum. Size: {} KB", factotum_data.len() / 1024);
 
     // 2. Allocate Factotum Resources
-    let f_cnode = rm.alloc_object(CapType::CNode, 1).expect("Failed to alloc CNode");
-    let f_vspace = rm.alloc_object(CapType::PageTable, 1).expect("Failed to alloc VSpace");
-    let f_tcb = rm.alloc_object(CapType::TCB, 1).expect("Failed to alloc TCB");
-    let f_endpoint = rm.alloc_object(CapType::Endpoint, 1).expect("Failed to alloc Endpoint");
-    let f_utcb_frame = rm.alloc_object(CapType::Frame, 1).expect("Failed to alloc UTCB Frame");
-    let f_trapframe = rm.alloc_object(CapType::Frame, 1).expect("Failed to alloc TrapFrame");
-    let f_kstack = rm.alloc_object(CapType::Frame, 1).expect("Failed to alloc KStack");
-    let f_stack_frame =
-        rm.alloc_object(CapType::Frame, STACK_PAGES).expect("Failed to alloc Stack Frame");
-    let f_heap_frame =
-        rm.alloc_object(CapType::Frame, HEAP_PAGES).expect("Failed to alloc Heap Frame");
+    let f_cnode = CNode::from(rm.alloc_object(CapType::CNode, 4).expect("Failed to alloc CNode"));
+    let f_vspace =
+        PageTable::from(rm.alloc_object(CapType::PageTable, 1).expect("Failed to alloc VSpace"));
+    let f_tcb = TCB::from(rm.alloc_object(CapType::TCB, 1).expect("Failed to alloc TCB"));
+    let f_endpoint =
+        Endpoint::from(rm.alloc_object(CapType::Endpoint, 1).expect("Failed to alloc Endpoint"));
+    let f_utcb_frame =
+        Frame::from(rm.alloc_object(CapType::Frame, 1).expect("Failed to alloc UTCB Frame"));
+    let f_trapframe =
+        Frame::from(rm.alloc_object(CapType::Frame, 1).expect("Failed to alloc TrapFrame"));
+    let f_kstack = Frame::from(rm.alloc_object(CapType::Frame, 1).expect("Failed to alloc KStack"));
+    let f_stack_frame = Frame::from(
+        rm.alloc_object(CapType::Frame, STACK_PAGES).expect("Failed to alloc Stack Frame"),
+    );
+    let f_heap_frame = Frame::from(
+        rm.alloc_object(CapType::Frame, HEAP_PAGES).expect("Failed to alloc Heap Frame"),
+    );
     // Allocate an endpoint for 9ball to receive faults/notifications
-    let monitor_ep = rm.alloc_object(CapType::Endpoint, 1).expect("Failed to alloc Monitor EP");
+    let monitor_ep =
+        Endpoint::from(rm.alloc_object(CapType::Endpoint, 1).expect("Failed to alloc Monitor EP"));
     // Mint into 9ball's own CSpace (Slot 11)
-    CapPtr(CSPACE_SLOT).cnode_mint(monitor_ep, 11, 0, rights::ALL);
+
+    let cspace = CSPACE_CAP;
+    cspace.debug_print();
+
+    cspace.mint(monitor_ep.cap(), 11, 0, rights::ALL);
 
     // 3. Setup Factotum CSpace
-    f_cnode.cnode_mint(f_cnode, CSPACE_SLOT, 0, rights::ALL);
-    f_cnode.cnode_mint(f_vspace, VSPACE_SLOT, 0, rights::ALL);
-    f_cnode.cnode_mint(f_tcb, TCB_SLOT, 0, rights::ALL);
-    f_cnode.cnode_mint(f_utcb_frame, UTCB_SLOT, 0, rights::ALL);
-    f_cnode.cnode_copy(CapPtr(INITRD_SLOT), INITRD_SLOT, rights::READ);
-    f_cnode.cnode_copy(CapPtr(CONSOLE_SLOT), CONSOLE_SLOT, rights::ALL);
-    f_cnode.cnode_mint(f_endpoint, 10, 0, rights::ALL);
+    f_cnode.mint(f_cnode.cap(), CSPACE_SLOT, 0, rights::ALL);
+    f_cnode.mint(f_vspace.cap(), VSPACE_SLOT, 0, rights::ALL);
+    f_cnode.mint(f_tcb.cap(), TCB_SLOT, 0, rights::ALL);
+    f_cnode.mint(f_utcb_frame.cap(), UTCB_SLOT, 0, rights::ALL);
+    f_cnode.copy(INITRD_CAP.cap(), INITRD_SLOT, rights::READ);
+    f_cnode.copy(CONSOLE_CAP.cap(), CONSOLE_SLOT, rights::ALL);
+    f_cnode.mint(f_endpoint.cap(), 10, 0, rights::ALL);
 
-    //f_cnode.cnode_debug_print();
+    f_cnode.debug_print();
 
     // 4. Set 9ball as Factotum's fault handler
-    f_tcb.tcb_set_fault_handler(monitor_ep);
+    f_tcb.set_fault_handler(monitor_ep);
 
     let entry_point = map_elf(rm, f_vspace, factotum_data);
 
     // 5. Setup Stack, UTCB and TrapFrame
-    map_with_alloc(rm, f_vspace, f_trapframe, TRAPFRAME_VA, perms::READ | perms::WRITE);
-    f_vspace.pagetable_map_trampoline();
+    map_with_alloc(
+        rm,
+        f_vspace,
+        f_trapframe,
+        TRAPFRAME_VA,
+        Perms::from(perms::READ | perms::WRITE),
+    );
+    f_vspace.map_trampoline();
     map_with_alloc(
         rm,
         f_vspace,
         f_stack_frame,
         STACK_VA - STACK_SIZE,
-        perms::READ | perms::WRITE | perms::USER,
+        Perms::from(perms::READ | perms::WRITE | perms::USER),
     );
-    map_with_alloc(rm, f_vspace, f_heap_frame, HEAP_VA, perms::READ | perms::WRITE | perms::USER);
-    map_with_alloc(rm, f_vspace, f_utcb_frame, UTCB_VA, perms::READ | perms::WRITE | perms::USER);
+    map_with_alloc(
+        rm,
+        f_vspace,
+        f_heap_frame,
+        HEAP_VA,
+        Perms::from(perms::READ | perms::WRITE | perms::USER),
+    );
+    map_with_alloc(
+        rm,
+        f_vspace,
+        f_utcb_frame,
+        UTCB_VA,
+        Perms::from(perms::READ | perms::WRITE | perms::USER),
+    );
 
     // 6. Transfer Remaining Untyped & IRQ
-    let mut dest_slot = 100;
-    while rm.untyped_slots.start.0 < rm.untyped_slots.end.0 {
-        let cap = rm.untyped_slots.start;
-        rm.untyped_slots.start.0 += 1;
-        f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
+    let untyped_start_slot = 100;
+    let mut dest_slot = untyped_start_slot;
+    let mut ptr = rm.untyped_slots.start;
+    while ptr < rm.untyped_slots.end {
+        let cap = CapPtr::from(ptr);
+        ptr += 1;
+        f_cnode.mint(cap, dest_slot, 0, rights::ALL);
         dest_slot += 1;
     }
     log!("Transferred {} untyped caps to Factotum", dest_slot - 100);
 
-    while rm.mmio_slots.start.0 < rm.mmio_slots.end.0 {
-        let cap = rm.mmio_slots.start;
-        rm.mmio_slots.start.0 += 1;
-        f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
-        dest_slot += 1;
-    }
-    log!("Transferred {} mmio caps to Factotum", dest_slot - 100);
-
-    let irq_start_slot = dest_slot;
-    let bootinfo = unsafe { &*(BOOTINFO_VA as *const BootInfo) };
-    let irq_count = bootinfo.irq.end.0 - bootinfo.irq.start.0;
-    for i in 0..irq_count {
-        let cap = CapPtr(bootinfo.irq.start.0 + i);
-        f_cnode.cnode_mint(cap, dest_slot, 0, rights::ALL);
-        dest_slot += 1;
-    }
-    log!("Transferred {} IRQ caps to Factotum", irq_count);
-
     // 7. Configure & Start TCB
-    f_tcb.tcb_configure(f_cnode, f_vspace, f_utcb_frame, f_trapframe, f_kstack);
-    f_tcb.tcb_set_priority(254);
-    f_tcb.tcb_set_registers(rights::ALL as usize, entry_point, STACK_VA);
-    f_tcb.tcb_resume();
+    f_tcb.configure(f_cnode, f_vspace, f_utcb_frame, f_trapframe, f_kstack);
+    f_tcb.set_priority(254);
+    f_tcb.set_registers(rights::ALL as usize, entry_point, STACK_VA);
+    f_tcb.resume();
     log!("Factotum started!");
 
     // 8. Initialize Factotum Resources
     let untyped_count = dest_slot - 100;
     let msg_tag = MsgTag::new(protocol::FACTOTUM_PROTO, 3);
-    let args = [protocol::INIT_RESOURCES, 100, untyped_count, 0, 0, 0, 0];
-    f_endpoint.ipc_call(msg_tag, args);
-
-    let msg_tag = MsgTag::new(protocol::FACTOTUM_PROTO, 3);
-    let args = [protocol::INIT_IRQ, irq_start_slot, irq_count, 0, 0, 0, 0];
-    f_endpoint.ipc_call(msg_tag, args);
-
+    let args = [protocol::INIT_RESOURCES, untyped_start_slot, untyped_count, 0, 0, 0, 0];
+    f_endpoint.call(msg_tag, args);
     f_endpoint
 }
 
 /// 解析 ELF 并将其段映射到目标地址空间
-fn map_elf(rm: &mut ResourceManager, vspace: CapPtr, elf_data: &[u8]) -> usize {
+fn map_elf(rm: &mut ResourceManager, vspace: PageTable, elf_data: &[u8]) -> usize {
     let elf = ElfFile::new(elf_data).expect("Invalid ELF");
-    let my_vspace = CapPtr(VSPACE_SLOT);
 
     for phdr in elf.program_headers() {
         if phdr.p_type != PT_LOAD {
@@ -218,28 +222,30 @@ fn map_elf(rm: &mut ResourceManager, vspace: CapPtr, elf_data: &[u8]) -> usize {
         let file_size = phdr.p_filesz as usize;
         let offset = phdr.p_offset as usize;
 
-        let mut perms = perms::USER | perms::READ;
+        let mut pms = perms::USER | perms::READ;
         if phdr.p_flags & PF_W != 0 {
-            perms |= perms::WRITE;
+            pms |= perms::WRITE;
         }
         if phdr.p_flags & PF_X != 0 {
-            perms |= perms::EXECUTE;
+            pms |= perms::EXECUTE;
         }
+
+        let perms = Perms::from(pms);
 
         let start_page = vaddr & !(PGSIZE - 1);
         let end_page = (vaddr + mem_size + PGSIZE - 1) & !(PGSIZE - 1);
 
         for page_vaddr in (start_page..end_page).step_by(PGSIZE) {
-            let frame = rm.alloc_object(CapType::Frame, 1).expect("OOM ELF Frame");
+            let frame = Frame::from(rm.alloc_object(CapType::Frame, 1).expect("OOM ELF Frame"));
 
             // 将页帧临时映射到 9ball 的 SCRATCH_VA 以便拷贝数据
             // 虽然使用了 SCRATCH_VA，但它仅作为 9ball 写入新页帧的窗口
             map_with_alloc(
                 rm,
-                my_vspace,
+                VSPACE_CAP,
                 frame,
                 SCRATCH_VA,
-                perms::READ | perms::WRITE | perms::USER,
+                Perms::from(perms::READ | perms::WRITE | perms::USER),
             );
             // my_vspace.pagetable_debug_print();
 
@@ -259,7 +265,7 @@ fn map_elf(rm: &mut ResourceManager, vspace: CapPtr, elf_data: &[u8]) -> usize {
             }
 
             // 解除 9ball 的临时映射并映射到目标进程
-            my_vspace.pagetable_unmap(SCRATCH_VA, PGSIZE);
+            VSPACE_CAP.unmap(SCRATCH_VA, 1);
             //my_vspace.pagetable_debug_print();
             map_with_alloc(rm, vspace, frame, page_vaddr, perms);
         }
@@ -268,13 +274,13 @@ fn map_elf(rm: &mut ResourceManager, vspace: CapPtr, elf_data: &[u8]) -> usize {
 }
 fn map_with_alloc(
     rm: &mut ResourceManager,
-    vspace: CapPtr,
-    frame: CapPtr,
+    vspace: PageTable,
+    frame: Frame,
     va: usize,
-    perms: usize,
+    perms: Perms,
 ) {
     // 1. 尝试直接映射
-    if vspace.pagetable_map(frame, va, perms) == 0 {
+    if vspace.map(frame, va, perms) == 0 {
         return;
     }
 
@@ -285,13 +291,13 @@ fn map_with_alloc(
     // 步骤 A: 检查并映射 L1 Table (由 Root 表的 VPN[2] 指向)
     // ----------------------------------------------------------------
     // 分配一个页表对象
-    let pt_l1 = rm.alloc_object(CapType::PageTable, 1).expect("OOM PT L1");
+    let pt_l1 = PageTable::from(rm.alloc_object(CapType::PageTable, 1).expect("OOM PT L1"));
 
     // [修复] 使用 level=2，表示我们在 Root 表(L2)中安装这个新页表
     // 该页表将作为 L1 Table
-    if vspace.pagetable_map_table(pt_l1, va, 2) == 0 {
+    if vspace.map_table(pt_l1, va, 2) == 0 {
         // L1 Table 安装成功后，再次尝试直接映射 Frame
-        if vspace.pagetable_map(frame, va, perms) == 0 {
+        if vspace.map(frame, va, perms) == 0 {
             return;
         }
     }
@@ -299,20 +305,20 @@ fn map_with_alloc(
     // 步骤 B: 检查并映射 L0 Table (由 L1 表的 VPN[1] 指向)
     // ----------------------------------------------------------------
     // 分配另一个页表对象
-    let pt_l0 = rm.alloc_object(CapType::PageTable, 1).expect("OOM PT L0");
+    let pt_l0 = PageTable::from(rm.alloc_object(CapType::PageTable, 1).expect("OOM PT L0"));
 
     // [修复] 使用 level=1，表示我们在 L1 表中安装这个新页表
     // 该页表将作为 L0 Table
-    if vspace.pagetable_map_table(pt_l0, va, 1) == 0 {
+    if vspace.map_table(pt_l0, va, 1) == 0 {
         // L0 Table 安装成功，再次尝试映射 Frame
-        if vspace.pagetable_map(frame, va, perms) == 0 {
+        if vspace.map(frame, va, perms) == 0 {
             return;
         }
     } // 3. 如果还失败，说明真的无法映射
     panic!("Failed to map frame at {:#x}", va);
 }
 
-fn spawn_services(f_endpoint: CapPtr, manifest: &Manifest) {
+fn spawn_services(f_endpoint: Endpoint, manifest: &Manifest) {
     for (i, entry) in manifest.service.iter().enumerate() {
         log!("Spawning component from manifest: {} (binary: {})", entry.name, entry.binary);
 
@@ -321,7 +327,7 @@ fn spawn_services(f_endpoint: CapPtr, manifest: &Manifest) {
 
         let tag = MsgTag::new(protocol::FACTOTUM_PROTO, 1);
         let args = [protocol::SPAWN_SERVICE_MANIFEST, i, 0, 0, 0, 0, 0];
-        f_endpoint.ipc_call(tag, args);
+        f_endpoint.call(tag, args);
 
         let pid = UTCB::current().mrs_regs[0];
         if pid == usize::MAX {
@@ -332,10 +338,10 @@ fn spawn_services(f_endpoint: CapPtr, manifest: &Manifest) {
     }
 }
 
-fn monitor(monitor_ep: CapPtr) -> ! {
+fn monitor(monitor_ep: Endpoint) -> ! {
     log!("Entering monitor loop...");
     loop {
-        let badge = monitor_ep.ipc_recv();
+        let badge = monitor_ep.recv();
         let utcb = UTCB::current();
         let tag = utcb.msg_tag;
         let label = tag.label();
