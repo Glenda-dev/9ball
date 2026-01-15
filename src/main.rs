@@ -145,6 +145,25 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> Endpoint {
     let entry_point = map_elf(rm, f_vspace, factotum_data);
 
     // 5. Setup Stack, UTCB and TrapFrame
+    {
+        use glenda::mem::RES_VA_BASE;
+        let initrd_size = initrd.data.len();
+        let initrd_start = RES_VA_BASE;
+        let initrd_end = initrd_start + initrd_size;
+        let pt_l1 = PageTable::from(rm.alloc_object(CapType::PageTable, 1).expect("OOM L1"));
+        let _ = f_vspace.map_table(pt_l1, initrd_start, 2);
+        let mut curr = initrd_start;
+        while curr < initrd_end {
+            let pt_l0 = PageTable::from(rm.alloc_object(CapType::PageTable, 1).expect("OOM L0"));
+            let _ = f_vspace.map_table(pt_l0, curr, 1);
+            curr += 0x200000; // 2MB
+        }
+
+        if f_vspace.map(INITRD_CAP, initrd_start, Perms::from(perms::READ | perms::USER)) != 0 {
+            panic!("Failed to map INITRD");
+        }
+    }
+
     map_with_alloc(
         rm,
         f_vspace,
