@@ -15,11 +15,11 @@ pub const UTCB_SLOT: usize = 7;
 pub const INITRD_SLOT: usize = 8;
 
 /// DTB Slot
-pub const DTB_SLOT: usize = 9;
+pub const PLATFORM_SLOT: usize = 9;
 
 pub const MONITOR_SLOT: usize = 10;
 
 pub const INITRD_CAP: Frame = Frame::from(CapPtr::from(INITRD_SLOT));
-pub const DTB_CAP: Frame = Frame::from(CapPtr::from(DTB_SLOT));
+pub const PLATFORM_CAP: Frame = Frame::from(CapPtr::from(PLATFORM_SLOT));
 pub const UTCB_CAP: Frame = Frame::from(CapPtr::from(UTCB_SLOT));
 pub const MONITOR_CAP: Endpoint = Endpoint::from(CapPtr::from(MONITOR_SLOT));
