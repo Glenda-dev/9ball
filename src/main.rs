@@ -136,9 +136,6 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> Endpoint {
     f_cnode.copy(CONSOLE_CAP.cap(), CONSOLE_SLOT, rights::ALL);
     f_cnode.mint(f_endpoint.cap(), 10, 0, rights::ALL);
 
-    // 4. Set 9ball as Factotum's fault handler
-    f_tcb.set_fault_handler(monitor_ep);
-
     let entry_point = map_elf(rm, f_vspace, factotum_data);
 
     // 5. Setup Stack, UTCB and TrapFrame
@@ -300,37 +297,46 @@ fn map_with_alloc(
         return;
     }
 
-    // 2. 映射失败，说明缺少中间页表。
+    // 2. 映射失败，说明可能缺少中间页表。
     // Sv39 布局：L2 (Root) -> L1 -> L0 -> Frame
+
+    // 尝试分配一个页表对象，用于填充缺失的层级
+    // 注意：我们将重用这个对象，避免在 L1 存在时造成泄漏
+    let mut pt_cap = rm.alloc_object(CapType::PageTable, 1).expect("OOM PT Alloc (Initial)");
+    let mut pt = PageTable::from(pt_cap);
 
     // ----------------------------------------------------------------
     // 步骤 A: 检查并映射 L1 Table (由 Root 表的 VPN[2] 指向)
     // ----------------------------------------------------------------
-    // 分配一个页表对象
-    let pt_l1 = PageTable::from(rm.alloc_object(CapType::PageTable, 1).expect("OOM PT L1"));
-
-    // [修复] 使用 level=2，表示我们在 Root 表(L2)中安装这个新页表
-    // 该页表将作为 L1 Table
-    if vspace.map_table(pt_l1, va, 2) == 0 {
+    // 尝试将新分配的页表作为 L1 表映射 (level=2)
+    if vspace.map_table(pt, va, 2) == 0 {
+        // [成功]：pt 已被安装为 L1 表
         // L1 Table 安装成功后，再次尝试直接映射 Frame
         if vspace.map(frame, va, perms) == 0 {
             return;
         }
+        // Frame 映射仍失败，说明还需要 L0 表。
+        // 因为 pt 已经被用作 L1，我们需要为 L0 分配一个新的页表对象
+        pt_cap = rm.alloc_object(CapType::PageTable, 1).expect("OOM PT Alloc (L0)");
+        pt = PageTable::from(pt_cap);
+    } else {
+        // [失败]：说明 L1 表已存在 (map_table 返回非零)
+        // 关键修复：之前分配的 pt 没有被使用，我们留给下一步作为 L0 表尝试！
+        // 避免了原代码中无意义的资源泄漏。
     }
+
     // ----------------------------------------------------------------
     // 步骤 B: 检查并映射 L0 Table (由 L1 表的 VPN[1] 指向)
     // ----------------------------------------------------------------
-    // 分配另一个页表对象
-    let pt_l0 = PageTable::from(rm.alloc_object(CapType::PageTable, 1).expect("OOM PT L0"));
-
-    // [修复] 使用 level=1，表示我们在 L1 表中安装这个新页表
-    // 该页表将作为 L0 Table
-    if vspace.map_table(pt_l0, va, 1) == 0 {
+    // 尝试将 pt (无论是新分配的还是上面回收的) 作为 L0 表映射 (level=1)
+    if vspace.map_table(pt, va, 1) == 0 {
         // L0 Table 安装成功，再次尝试映射 Frame
         if vspace.map(frame, va, perms) == 0 {
             return;
         }
-    } // 3. 如果还失败，说明真的无法映射
+    }
+
+    // 3. 如果还失败，说明真的无法映射
     panic!("Failed to map frame at {:#x}", va);
 }
 
