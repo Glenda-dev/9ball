@@ -167,7 +167,7 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> Endpoint {
         TRAPFRAME_VA,
         Perms::from(perms::READ | perms::WRITE),
     );
-    f_vspace.map_trampoline();
+    f_vspace.setup();
     map_with_alloc(
         rm,
         f_vspace,
