@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(dead_code)]
 
 extern crate alloc;
 
@@ -9,6 +10,7 @@ mod manager;
 
 use crate::layout::{INITRD_CAP, MONITOR_CAP};
 use bootinfo::BootInfo;
+use glenda;
 use glenda::cap::pagetable::{Perms, perms};
 use glenda::cap::{
     CNode, CONSOLE_CAP, CONSOLE_SLOT, CSPACE_CAP, CSPACE_SLOT, CapPtr, CapType, Endpoint, Frame,
@@ -34,7 +36,7 @@ macro_rules! log {
 
 // TODO: Refactor this
 #[unsafe(no_mangle)]
-fn main() -> ! {
+fn main() -> usize {
     log!("Hello from 9ball (Root Task)!");
 
     let bootinfo = unsafe { &*(BOOTINFO_VA as *const BootInfo) };
@@ -59,24 +61,25 @@ fn main() -> ! {
 
     // 4. Enter Monitor Loop
     monitor(MONITOR_CAP); // 9ball's own endpoint
+    0
 }
 
 fn print_bootinfo(bootinfo: &BootInfo) {
     log!("BootInfo Magic: {:#x}", bootinfo.magic);
     log!("BootInfo DTB: Address = {:#x}, Size = {}", bootinfo.dtb_paddr, bootinfo.dtb_size);
     log!(
-        "BootInfo MMIOs: Count = {}, [{:?},{:?})",
+        "BootInfo MMIOs: Count = {}, [{},{})",
         bootinfo.mmio_count,
         bootinfo.mmio.start,
         bootinfo.mmio.end
     );
     log!(
-        "BootInfo Untypes: Count = {}, [{:?},{:?})",
+        "BootInfo Untypes: Count = {}, [{},{})",
         bootinfo.untyped_count,
         bootinfo.untyped.start,
         bootinfo.untyped.end
     );
-    log!("BootInfo IRQS: [{:?},{:?})", bootinfo.irq.start, bootinfo.irq.end);
+    log!("BootInfo IRQS: [{},{})", bootinfo.irq.start, bootinfo.irq.end);
 }
 
 fn parse_manifest(initrd: &Initrd) -> Manifest {
@@ -99,7 +102,6 @@ fn start_factotum(rm: &mut ResourceManager, initrd: &Initrd) -> Endpoint {
     let factotum_data = initrd.get_file("factotum").expect("Factotum not found in initrd");
 
     log!("Found Factotum. Size: {} KB", factotum_data.len() / 1024);
-
     // 2. Allocate Factotum Resources
     let f_cnode = CNode::from(rm.alloc_object(CapType::CNode, 4).expect("Failed to alloc CNode"));
     let f_vspace =
