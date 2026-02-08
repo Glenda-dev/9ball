@@ -3,6 +3,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use glenda::error::Error;
 use glenda::interface::InitService;
+use glenda::ipc::Badge;
 use glenda::protocol::init::{ServiceState, ServiceStatus};
 
 impl InitService for InitManager {
@@ -26,7 +27,7 @@ impl InitService for InitManager {
         unimplemented!()
     }
 
-    fn report_service(&self, pid: usize, status: ServiceState) -> Result<(), Error> {
+    fn report_service(&self, pid: Badge, status: ServiceState) -> Result<(), Error> {
         unimplemented!()
     }
 
