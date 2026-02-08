@@ -7,27 +7,27 @@ use glenda::ipc::Badge;
 use glenda::protocol::init::{ServiceState, ServiceStatus};
 
 impl InitService for InitManager {
-    fn start_service(&mut self, service: String) -> Result<(), Error> {
+    fn start_service(&mut self, _service: String) -> Result<(), Error> {
         unimplemented!()
     }
 
-    fn stop_service(&mut self, service: String) -> Result<(), Error> {
+    fn stop_service(&mut self, _service: String) -> Result<(), Error> {
         unimplemented!()
     }
 
-    fn restart_service(&mut self, service: String) -> Result<(), Error> {
+    fn restart_service(&mut self, _service: String) -> Result<(), Error> {
         unimplemented!()
     }
 
-    fn reload_service(&mut self, service: String) -> Result<(), Error> {
+    fn reload_service(&mut self, _service: String) -> Result<(), Error> {
         unimplemented!()
     }
 
-    fn query_service(&self, service: String) -> Result<ServiceStatus, Error> {
+    fn query_service(&self, _service: String) -> Result<ServiceStatus, Error> {
         unimplemented!()
     }
 
-    fn report_service(&self, pid: Badge, status: ServiceState) -> Result<(), Error> {
+    fn report_service(&self, _pid: Badge, _status: ServiceState) -> Result<(), Error> {
         unimplemented!()
     }
 
