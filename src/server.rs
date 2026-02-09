@@ -4,6 +4,7 @@ use alloc::string::String;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::error::Error;
 use glenda::interface::{InitService, SystemService};
+use glenda::ipc::server::handle_call;
 use glenda::ipc::{MsgFlags, MsgTag, UTCB};
 use glenda::protocol;
 
@@ -76,77 +77,46 @@ impl SystemService for InitManager {
             flags,
             msg
         );
-        if proto != protocol::INIT_PROTO {
-            return Err(Error::InvalidProtocol);
-        }
-        match label {
-            protocol::init::START => {
-                let name =
-                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
-                self.start_service(name)?;
-                utcb.set_msg_tag(MsgTag::new(
-                    protocol::GENERIC_PROTO,
-                    protocol::generic::REPLY,
-                    MsgFlags::OK,
-                ));
-                Ok(())
-            }
-            protocol::init::STOP => {
-                let name =
-                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
-                self.stop_service(name)?;
-                utcb.set_msg_tag(MsgTag::new(
-                    protocol::GENERIC_PROTO,
-                    protocol::generic::REPLY,
-                    MsgFlags::OK,
-                ));
-                Ok(())
-            }
-            protocol::init::RESTART => {
-                let name =
-                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
-                self.restart_service(name)?;
-                utcb.set_msg_tag(MsgTag::new(
-                    protocol::GENERIC_PROTO,
-                    protocol::generic::REPLY,
-                    MsgFlags::OK,
-                ));
-                Ok(())
-            }
-            protocol::init::RELOAD => {
-                let name =
-                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
-                self.reload_service(name)?;
-                utcb.set_msg_tag(MsgTag::new(
-                    protocol::GENERIC_PROTO,
-                    protocol::generic::REPLY,
-                    MsgFlags::OK,
-                ));
-                Ok(())
-            }
-            protocol::init::QUERY => {
-                let name =
-                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
-                let status = self.query_service(name)?;
-                unsafe { utcb.write_postcard(&status).map_err(|_| Error::InvalidParam) }?;
-                utcb.set_msg_tag(MsgTag::new(
-                    protocol::GENERIC_PROTO,
-                    protocol::generic::REPLY,
-                    MsgFlags::OK,
-                ));
-                Ok(())
-            }
-            protocol::init::LIST => {
-                let services = self.list_services()?;
-                unsafe { utcb.write_postcard(&services).map_err(|_| Error::InvalidParam) }?;
-                utcb.set_msg_tag(MsgTag::new(
-                    protocol::GENERIC_PROTO,
-                    protocol::generic::REPLY,
-                    MsgFlags::OK,
-                ));
-                Ok(())
-            }
-            _ => Err(Error::NotImplemented),
+
+        glenda::ipc_dispatch! {
+            self, utcb,
+            (protocol::INIT_PROTO, protocol::init::START) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let name = unsafe { u.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
+                    s.start_service(name)
+                })
+            },
+            (protocol::INIT_PROTO, protocol::init::STOP) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let name = unsafe { u.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
+                    s.stop_service(name)
+                })
+            },
+            (protocol::INIT_PROTO, protocol::init::RESTART) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let name = unsafe { u.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
+                    s.restart_service(name)
+                })
+            },
+            (protocol::INIT_PROTO, protocol::init::RELOAD) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let name = unsafe { u.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
+                    s.reload_service(name)
+                })
+            },
+            (protocol::INIT_PROTO, protocol::init::QUERY) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let name = unsafe { u.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
+                    let status = s.query_service(name)?;
+                    unsafe { u.write_postcard(&status).map_err(|_| Error::InvalidParam) }
+                })
+            },
+            (protocol::INIT_PROTO, protocol::init::LIST) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let services = s.list_services()?;
+                    unsafe { u.write_postcard(&services).map_err(|_| Error::InvalidParam) }
+                })
+            },
         }
     }
     fn reply(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
