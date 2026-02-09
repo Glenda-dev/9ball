@@ -4,7 +4,7 @@ use alloc::string::String;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::error::Error;
 use glenda::interface::{InitService, SystemService};
-use glenda::ipc::{Badge, MsgFlags, MsgTag, UTCB};
+use glenda::ipc::{MsgFlags, MsgTag, UTCB};
 use glenda::protocol;
 
 impl SystemService for InitManager {
@@ -23,53 +23,50 @@ impl SystemService for InitManager {
         }
         self.running = true;
         while self.running {
-            match self.endpoint.recv(self.reply.cap()) {
+            let mut utcb = unsafe { UTCB::new() };
+            match self.endpoint.recv(&mut utcb) {
                 Ok(b) => b,
                 Err(e) => {
                     log!("Recv error: {:?}", e);
                     continue;
                 }
             };
-            let utcb = unsafe { UTCB::get() };
-            let msg_info = utcb.msg_tag;
-            let badge = utcb.badge;
 
-            let res = self.dispatch(badge, msg_info);
-            match res {
-                Ok(_) => self.reply(MsgTag::new(
-                    protocol::GENERIC_PROTO,
-                    protocol::generic::REPLY,
-                    MsgFlags::OK,
-                ))?,
-                Err(e) => match e {
+            let res = self.dispatch(&mut utcb);
+            if let Err(e) = res {
+                match e {
                     Error::Success => {
                         continue;
                     }
-                    Error::HasCap => self.reply(MsgTag::new(
-                        protocol::GENERIC_PROTO,
-                        protocol::generic::REPLY,
-                        MsgFlags::OK | MsgFlags::HAS_CAP,
-                    ))?,
+                    Error::HasCap => {
+                        utcb.set_msg_tag(MsgTag::new(
+                            protocol::GENERIC_PROTO,
+                            protocol::generic::REPLY,
+                            MsgFlags::OK | MsgFlags::HAS_CAP,
+                        ));
+                    }
                     _ => {
-                        let utcb = unsafe { UTCB::get() };
-                        utcb.mrs_regs[0] = e as usize;
-                        self.reply(MsgTag::new(
+                        utcb.set_mr(0, e as usize);
+                        utcb.set_msg_tag(MsgTag::new(
                             protocol::GENERIC_PROTO,
                             protocol::generic::REPLY,
                             MsgFlags::ERROR,
-                        ))?
+                        ));
                     }
-                },
+                }
             }
+
+            self.reply(&mut utcb)?;
         }
         Ok(())
     }
-    fn dispatch(&mut self, badge: Badge, info: MsgTag) -> Result<(), Error> {
+    fn dispatch(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
+        let badge = utcb.get_badge();
+        let info = utcb.get_msg_tag();
         let label = info.label();
         let proto = info.proto();
         let flags = info.flags();
-        let utcb = unsafe { UTCB::get() };
-        let msg = utcb.mrs_regs;
+        let msg = utcb.get_mrs();
 
         log!(
             "Received message: badge={}, label={}, proto={}, flags={}, msg={:?}",
@@ -85,45 +82,75 @@ impl SystemService for InitManager {
         match label {
             protocol::init::START => {
                 let name =
-                    unsafe { utcb.read_postcard::<String>().map_err(|_| Error::InvalidParam) }?;
+                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
                 self.start_service(name)?;
+                utcb.set_msg_tag(MsgTag::new(
+                    protocol::GENERIC_PROTO,
+                    protocol::generic::REPLY,
+                    MsgFlags::OK,
+                ));
                 Ok(())
             }
             protocol::init::STOP => {
                 let name =
-                    unsafe { utcb.read_postcard::<String>().map_err(|_| Error::InvalidParam) }?;
+                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
                 self.stop_service(name)?;
+                utcb.set_msg_tag(MsgTag::new(
+                    protocol::GENERIC_PROTO,
+                    protocol::generic::REPLY,
+                    MsgFlags::OK,
+                ));
                 Ok(())
             }
             protocol::init::RESTART => {
                 let name =
-                    unsafe { utcb.read_postcard::<String>().map_err(|_| Error::InvalidParam) }?;
+                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
                 self.restart_service(name)?;
+                utcb.set_msg_tag(MsgTag::new(
+                    protocol::GENERIC_PROTO,
+                    protocol::generic::REPLY,
+                    MsgFlags::OK,
+                ));
                 Ok(())
             }
             protocol::init::RELOAD => {
                 let name =
-                    unsafe { utcb.read_postcard::<String>().map_err(|_| Error::InvalidParam) }?;
+                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
                 self.reload_service(name)?;
+                utcb.set_msg_tag(MsgTag::new(
+                    protocol::GENERIC_PROTO,
+                    protocol::generic::REPLY,
+                    MsgFlags::OK,
+                ));
                 Ok(())
             }
             protocol::init::QUERY => {
                 let name =
-                    unsafe { utcb.read_postcard::<String>().map_err(|_| Error::InvalidParam) }?;
+                    unsafe { utcb.read_postcard::<String>() }.map_err(|_| Error::InvalidParam)?;
                 let status = self.query_service(name)?;
-                (unsafe { utcb.write_postcard(&status).map_err(|_| Error::InvalidParam) })?;
+                unsafe { utcb.write_postcard(&status).map_err(|_| Error::InvalidParam) }?;
+                utcb.set_msg_tag(MsgTag::new(
+                    protocol::GENERIC_PROTO,
+                    protocol::generic::REPLY,
+                    MsgFlags::OK,
+                ));
                 Ok(())
             }
             protocol::init::LIST => {
                 let services = self.list_services()?;
-                (unsafe { utcb.write_postcard(&services).map_err(|_| Error::InvalidParam) })?;
+                unsafe { utcb.write_postcard(&services).map_err(|_| Error::InvalidParam) }?;
+                utcb.set_msg_tag(MsgTag::new(
+                    protocol::GENERIC_PROTO,
+                    protocol::generic::REPLY,
+                    MsgFlags::OK,
+                ));
                 Ok(())
             }
             _ => Err(Error::NotImplemented),
         }
     }
-    fn reply(&mut self, info: MsgTag) -> Result<(), Error> {
-        self.reply.reply(info)
+    fn reply(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
+        self.reply.reply(utcb)
     }
     fn stop(&mut self) {
         self.running = false;

@@ -20,7 +20,7 @@ pub use nineball::InitManager;
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => ({
-        glenda::println!("9ball: {}", format_args!($($arg)*));
+        glenda::println!("{}9ball: {}{}", glenda::console::ANSI_BLUE, format_args!($($arg)*), glenda::console::ANSI_RESET);
     })
 }
 
