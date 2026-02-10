@@ -4,15 +4,14 @@
 
 extern crate alloc;
 use glenda;
-
-use glenda::cap::{MONITOR_CAP, REPLY_SLOT};
+use glenda::cap::REPLY_SLOT;
 use glenda::error::Error;
 use glenda::interface::SystemService;
+use layout::INIT_CAP;
 
 mod config;
-mod init;
+mod layout;
 mod nineball;
-mod server;
 
 pub use config::{Manifest, ServiceEntry};
 pub use nineball::InitManager;
@@ -28,23 +27,17 @@ macro_rules! log {
 fn main() -> usize {
     log!("Init System starting...");
 
-    // 1. Load Manifest
-    let manifest = config::load();
-
-    // 2. Spawn services
-
-    let mut server = InitManager::new(manifest);
+    let mut server = InitManager::new();
 
     if let Err(e) = load_9ball(&mut server) {
-        log!("Failed to load: {:?}", e);
-        return 1;
+        panic!("Failed to load 9ball: {:?}", e);
     }
     server.run().expect("9Ball Init exited");
     1
 }
 
 fn load_9ball(server: &mut InitManager) -> Result<(), Error> {
-    server.listen(MONITOR_CAP, REPLY_SLOT)?;
     server.init()?;
+    server.listen(INIT_CAP, REPLY_SLOT)?;
     Ok(())
 }
