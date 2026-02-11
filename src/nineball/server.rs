@@ -1,32 +1,40 @@
-use crate::InitManager;
-use crate::layout::{INIT_SLOT, MANIFEST_ADDR, MANIFEST_SLOT};
+use crate::layout::{MANIFEST_ADDR, MANIFEST_SLOT};
 use crate::log;
-use glenda::cap::{CapPtr, CapType, Endpoint, Reply};
+use crate::NineBallManager;
+use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::error::Error;
-use glenda::interface::{
-    InitResourceService, InitService, MemoryService, ResourceService, SystemService,
-};
+use glenda::interface::{InitService, MemoryService, ResourceService, SystemService};
 use glenda::ipc::server::handle_call;
 use glenda::ipc::{Badge, MsgTag, UTCB};
 use glenda::protocol;
+use glenda::protocol::resource::ResourceType;
+use glenda::protocol::resource::INIT_ENDPOINT;
 
-impl SystemService for InitManager {
+impl<'a> SystemService for NineBallManager<'a> {
     fn init(&mut self) -> Result<(), Error> {
-        self.res_client.alloc(Badge::null(), CapType::Endpoint, 0, INIT_SLOT)?;
-        let (frame, size) = self.res_client.get_file(Badge::null(), "init.json", MANIFEST_SLOT)?;
+        log!("Loading config...");
+        let (frame, size) =
+            self.res_client.get_config(Badge::null(), "init.json", MANIFEST_SLOT)?;
         self.res_client.mmap(Badge::null(), frame, MANIFEST_ADDR, size)?;
         let data = unsafe { core::slice::from_raw_parts(MANIFEST_ADDR as *const u8, size) };
         self.config = serde_json::from_slice(data).map_err(|_| Error::InvalidConfig)?;
         self.launch()?;
         Ok(())
     }
-    fn listen(&mut self, ep: Endpoint, reply: CapPtr) -> Result<(), Error> {
+    fn listen(&mut self, ep: Endpoint, reply: CapPtr, recv: CapPtr) -> Result<(), Error> {
         self.endpoint = ep;
         self.reply = Reply::from(reply);
+        self.recv = recv;
+        self.res_client.register_cap(
+            Badge::null(),
+            ResourceType::Endpoint,
+            INIT_ENDPOINT,
+            ep.cap(),
+        )?;
         Ok(())
     }
     fn run(&mut self) -> Result<(), Error> {
-        if self.endpoint.cap().is_null() || self.reply.cap().is_null() {
+        if self.endpoint.cap().is_null() || self.reply.cap().is_null() || self.recv.is_null() {
             return Err(Error::NotInitialized);
         }
         self.running = true;

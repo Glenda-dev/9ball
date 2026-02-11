@@ -6,33 +6,34 @@ use crate::log;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use glenda::cap::MONITOR_CAP;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::client::{ProcessClient, ResourceClient};
 use glenda::error::Error;
 use glenda::interface::InitService;
 use glenda::protocol::init::ServiceStatus;
 
-pub struct InitManager {
+pub struct NineBallManager<'a> {
     pub running: bool,
     pub endpoint: Endpoint,
     pub reply: Reply,
+    pub recv: CapPtr,
     pub config: Manifest,
-    pub proc_client: ProcessClient,
-    pub res_client: ResourceClient,
+    pub proc_client: &'a mut ProcessClient,
+    pub res_client: &'a mut ResourceClient,
     pub services: BTreeMap<String, ServiceStatus>,
 }
 
-impl InitManager {
-    pub fn new() -> Self {
+impl<'a> NineBallManager<'a> {
+    pub fn new(proc_client: &'a mut ProcessClient, res_client: &'a mut ResourceClient) -> Self {
         Self {
             running: false,
             endpoint: Endpoint::from(CapPtr::null()),
             reply: Reply::from(CapPtr::null()),
+            recv: CapPtr::null(),
             config: Manifest::new(),
             services: BTreeMap::new(),
-            proc_client: ProcessClient::new(MONITOR_CAP),
-            res_client: ResourceClient::new(MONITOR_CAP),
+            proc_client,
+            res_client,
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::InitManager;
+use crate::NineBallManager;
 use crate::log;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -7,7 +7,7 @@ use glenda::interface::{InitService, ProcessService};
 use glenda::ipc::Badge;
 use glenda::protocol::init::{ServiceState, ServiceStatus};
 
-impl InitService for InitManager {
+impl<'a> InitService for NineBallManager<'a> {
     fn start_service(&mut self, service: &str) -> Result<(), Error> {
         if self.services.contains_key(service) {
             return Err(Error::AlreadyExists);
