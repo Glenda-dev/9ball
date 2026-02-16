@@ -1,14 +1,14 @@
+use crate::NineBallManager;
 use crate::layout::{MANIFEST_ADDR, MANIFEST_SLOT};
 use crate::log;
-use crate::NineBallManager;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::error::Error;
 use glenda::interface::{InitService, MemoryService, ResourceService, SystemService};
 use glenda::ipc::server::handle_call;
 use glenda::ipc::{Badge, MsgTag, UTCB};
 use glenda::protocol;
-use glenda::protocol::resource::ResourceType;
 use glenda::protocol::resource::INIT_ENDPOINT;
+use glenda::protocol::resource::ResourceType;
 
 impl<'a> SystemService for NineBallManager<'a> {
     fn init(&mut self) -> Result<(), Error> {
@@ -65,22 +65,6 @@ impl<'a> SystemService for NineBallManager<'a> {
         Ok(())
     }
     fn dispatch(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
-        let badge = utcb.get_badge();
-        let info = utcb.get_msg_tag();
-        let label = info.label();
-        let proto = info.proto();
-        let flags = info.flags();
-        let msg = utcb.get_mrs();
-
-        log!(
-            "Received message: badge={}, label={}, proto={}, flags={}, msg={:?}",
-            badge,
-            label,
-            proto,
-            flags,
-            msg
-        );
-
         glenda::ipc_dispatch! {
             self, utcb,
             (protocol::INIT_PROTO, protocol::init::START) => |s: &mut Self, u: &mut UTCB| {
