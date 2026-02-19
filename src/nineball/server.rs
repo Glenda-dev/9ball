@@ -1,6 +1,6 @@
 use crate::NineBallManager;
 use crate::layout::{MANIFEST_ADDR, MANIFEST_SLOT};
-use crate::log;
+use crate::{error, log};
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::error::Error;
 use glenda::interface::{InitService, MemoryService, ResourceService, SystemService};
@@ -55,7 +55,8 @@ impl<'a> SystemService for NineBallManager<'a> {
                 if e == Error::Success {
                     continue;
                 }
-                log!("Failed to dispatch message: {:?}", e);
+                let badge = utcb.get_badge();
+                error!("Failed to dispatch message for {}: {:?}", badge, e);
                 utcb.set_msg_tag(MsgTag::err());
                 utcb.set_mr(0, e as usize);
             }
