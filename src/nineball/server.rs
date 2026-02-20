@@ -1,6 +1,5 @@
 use crate::NineBallManager;
 use crate::layout::{MANIFEST_ADDR, MANIFEST_SLOT};
-use crate::{error, log};
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::error::Error;
 use glenda::interface::{InitService, MemoryService, ResourceService, SystemService};

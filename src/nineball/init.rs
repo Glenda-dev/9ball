@@ -1,5 +1,4 @@
 use crate::NineBallManager;
-use crate::log;
 use alloc::string::String;
 use alloc::vec::Vec;
 use glenda::error::Error;

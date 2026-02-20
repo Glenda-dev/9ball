@@ -2,7 +2,6 @@ pub mod init;
 pub mod server;
 
 use crate::Manifest;
-use crate::log;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;

@@ -2,8 +2,10 @@
 #![no_main]
 #![allow(dead_code)]
 
+#[macro_use]
+extern crate glenda;
+
 extern crate alloc;
-use glenda;
 use glenda::cap::CapType;
 use glenda::cap::{ENDPOINT_CAP, ENDPOINT_SLOT, MONITOR_CAP, RECV_SLOT, REPLY_SLOT};
 use glenda::client::{ProcessClient, ResourceClient};
@@ -18,21 +20,9 @@ mod nineball;
 pub use config::Manifest;
 pub use nineball::NineBallManager;
 
-#[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => ({
-        glenda::println!("{}9ball: {}{}", glenda::console::ANSI_BLUE, format_args!($($arg)*), glenda::console::ANSI_RESET);
-    })
-}
-#[macro_export]
-macro_rules! error {
-    ($($arg:tt)*) => ({
-        glenda::println!("{}9ball: {}{}", glenda::console::ANSI_RED, format_args!($($arg)*), glenda::console::ANSI_RESET);
-    })
-}
-
 #[unsafe(no_mangle)]
 fn main() -> usize {
+    glenda::console::init_logging("9ball");
     log!("Init System starting...");
     let mut proc_client = ProcessClient::new(MONITOR_CAP);
     let mut res_client = ResourceClient::new(MONITOR_CAP);
