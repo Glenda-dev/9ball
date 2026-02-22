@@ -7,21 +7,23 @@ use glenda::ipc::Badge;
 use glenda::protocol::init::{ServiceState, ServiceStatus};
 
 impl<'a> InitService for NineBallManager<'a> {
-    fn start_service(&mut self, service: &str) -> Result<(), Error> {
-        if self.services.contains_key(service) {
-            return Err(Error::AlreadyExists);
+    fn start_service(&mut self, service_name: &str) -> Result<(), Error> {
+        if let Some(status) = self.services.get(service_name) {
+            if status.running == ServiceState::Running || status.running == ServiceState::Starting {
+                return Err(Error::AlreadyExists);
+            }
         }
 
-        if !self.check_dependencies(service) {
+        if !self.check_dependencies(service_name) {
             return Err(Error::PermissionDenied); // Or a more specific error for dependencies
         }
 
-        let service =
-            self.config.services.iter().find(|s| s.name == service).ok_or(Error::NotFound)?;
+        let entry =
+            self.config.services.iter().find(|s| s.name == service_name).ok_or(Error::NotFound)?;
 
-        log!("Launching service: {}", service.name);
-        let pid = self.proc_client.spawn(Badge::null(), &service.name)?;
-        self.services.insert(service.name.clone(), ServiceStatus::new(service.name.clone(), pid));
+        log!("Launching service: {}", entry.name);
+        let pid = self.proc_client.spawn(Badge::null(), &entry.name)?;
+        self.services.insert(entry.name.clone(), ServiceStatus::new(entry.name.clone(), pid));
         Ok(())
     }
 
@@ -50,8 +52,20 @@ impl<'a> InitService for NineBallManager<'a> {
     fn report_service(&mut self, badge: Badge, status: ServiceState) -> Result<(), Error> {
         let pid = badge.bits();
         if let Some(service_status) = self.services.values_mut().find(|s| s.pid == pid) {
+            let old_status = service_status.running;
             service_status.running = status;
-            log!("Service {} reported status: {:?}", service_status.name, status);
+            log!("Service {} transition: {:?} -> {:?}", service_status.name, old_status, status);
+
+            match status {
+                ServiceState::Running => {
+                    self.bootstrap().ok();
+                }
+                ServiceState::Failed | ServiceState::Exited | ServiceState::Stopped => {
+                    // Trigger reconciliation
+                    self.bootstrap().ok();
+                }
+                _ => {}
+            }
             Ok(())
         } else {
             Err(Error::NotFound)

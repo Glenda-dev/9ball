@@ -17,7 +17,6 @@ impl<'a> SystemService for NineBallManager<'a> {
         self.res_client.mmap(Badge::null(), frame, MANIFEST_ADDR, size)?;
         let data = unsafe { core::slice::from_raw_parts(MANIFEST_ADDR as *const u8, size) };
         self.config = serde_json::from_slice(data).map_err(|_| Error::InvalidConfig)?;
-        self.launch()?;
         Ok(())
     }
     fn listen(&mut self, ep: Endpoint, reply: CapPtr, recv: CapPtr) -> Result<(), Error> {
@@ -36,6 +35,8 @@ impl<'a> SystemService for NineBallManager<'a> {
         if self.endpoint.cap().is_null() || self.reply.cap().is_null() || self.recv.is_null() {
             return Err(Error::NotInitialized);
         }
+        log!("Bootstrap system...");
+        self.bootstrap()?;
         self.running = true;
         while self.running {
             let mut utcb = unsafe { UTCB::new() };
@@ -55,7 +56,12 @@ impl<'a> SystemService for NineBallManager<'a> {
                     continue;
                 }
                 let badge = utcb.get_badge();
-                error!("Failed to dispatch message for {}: {:?}", badge, e);
+                let proto = utcb.get_msg_tag().proto();
+                let label = utcb.get_msg_tag().label();
+                error!(
+                    "Failed to dispatch message for {}: {:?}, proto={:#x}, label={:#x}",
+                    badge, e, proto, label
+                );
                 utcb.set_msg_tag(MsgTag::err());
                 utcb.set_mr(0, e as usize);
             }
@@ -104,6 +110,16 @@ impl<'a> SystemService for NineBallManager<'a> {
                     unsafe { u.write_postcard(&services).map_err(|_| Error::InvalidArgs) }
                 })
             },
+            (protocol::INIT_PROTO, protocol::init::REPORT) => |s: &mut Self, u: &mut UTCB| {
+                handle_call(u, |u| {
+                    let badge = u.get_badge();
+                    let status =  protocol::init::ServiceState::from(u.get_mr(0));
+                    s.report_service(badge, status)
+                })
+            },
+            (_,_)=> |_, _| {
+                Err(Error::InvalidMethod)
+            }
         }
     }
     fn reply(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
