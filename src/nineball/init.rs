@@ -10,11 +10,13 @@ impl<'a> InitService for NineBallManager<'a> {
     fn start_service(&mut self, service_name: &str) -> Result<(), Error> {
         if let Some(status) = self.services.get(service_name) {
             if status.running == ServiceState::Running || status.running == ServiceState::Starting {
+                warn!("Service '{}' is already running or starting", service_name);
                 return Err(Error::AlreadyExists);
             }
         }
 
         if !self.check_dependencies(service_name) {
+            error!("Cannot start service '{}': dependencies not met", service_name);
             return Err(Error::PermissionDenied); // Or a more specific error for dependencies
         }
 
