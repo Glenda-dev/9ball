@@ -45,7 +45,7 @@ impl<'a> SystemService for NineBallManager<'a> {
             match self.endpoint.recv(&mut utcb) {
                 Ok(b) => b,
                 Err(e) => {
-                    log!("Recv error: {:?}", e);
+                    error!("Recv error: {:?}", e);
                     continue;
                 }
             };
