@@ -10,6 +10,7 @@ use glenda::client::{ProcessClient, ResourceClient};
 use glenda::error::Error;
 use glenda::interface::InitService;
 use glenda::protocol::init::{ServiceState, ServiceStatus};
+use glenda::utils::manager::{CSpaceManager, VSpaceManager};
 
 pub struct NineBallManager<'a> {
     pub running: bool,
@@ -19,11 +20,18 @@ pub struct NineBallManager<'a> {
     pub config: Manifest,
     pub proc_client: &'a mut ProcessClient,
     pub res_client: &'a mut ResourceClient,
+    pub cspace: &'a mut CSpaceManager,
+    pub vspace: &'a mut VSpaceManager,
     pub services: BTreeMap<String, ServiceStatus>,
 }
 
 impl<'a> NineBallManager<'a> {
-    pub fn new(proc_client: &'a mut ProcessClient, res_client: &'a mut ResourceClient) -> Self {
+    pub fn new(
+        proc_client: &'a mut ProcessClient,
+        res_client: &'a mut ResourceClient,
+        cspace: &'a mut CSpaceManager,
+        vspace: &'a mut VSpaceManager,
+    ) -> Self {
         Self {
             running: false,
             endpoint: Endpoint::from(CapPtr::null()),
@@ -33,6 +41,8 @@ impl<'a> NineBallManager<'a> {
             services: BTreeMap::new(),
             proc_client,
             res_client,
+            cspace,
+            vspace,
         }
     }
 

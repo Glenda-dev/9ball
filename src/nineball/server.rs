@@ -1,21 +1,38 @@
 use crate::NineBallManager;
 use crate::layout::{MANIFEST_ADDR, MANIFEST_SLOT};
+use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CapPtr, Endpoint, Reply};
 use glenda::error::Error;
-use glenda::interface::{InitService, MemoryService, ResourceService, SystemService};
+use glenda::interface::{InitService, ResourceService, SystemService};
 use glenda::ipc::server::handle_call;
 use glenda::ipc::{Badge, MsgTag, UTCB};
+use glenda::mem::Perms;
 use glenda::protocol;
 use glenda::protocol::resource::INIT_ENDPOINT;
 use glenda::protocol::resource::ResourceType;
+use glenda::utils::align::align_up;
+use glenda::interface::VSpaceService;
 
 impl<'a> SystemService for NineBallManager<'a> {
     fn init(&mut self) -> Result<(), Error> {
         log!("Loading config...");
         let (frame, size) =
             self.res_client.get_config(Badge::null(), "init.json", MANIFEST_SLOT)?;
-        self.res_client.mmap(Badge::null(), frame, MANIFEST_ADDR, size)?;
+
+        self.vspace.map_frame(
+            frame,
+            MANIFEST_ADDR,
+            Perms::READ | Perms::WRITE,
+            align_up(size, PGSIZE) / PGSIZE,
+            self.res_client,
+            self.cspace,
+        )?;
+
         let data = unsafe { core::slice::from_raw_parts(MANIFEST_ADDR as *const u8, size) };
+        if size == 0 {
+            error!("Config size is 0");
+            return Err(Error::InvalidConfig);
+        }
         self.config = serde_json::from_slice(data).map_err(|_| Error::InvalidConfig)?;
         Ok(())
     }

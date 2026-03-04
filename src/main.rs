@@ -6,12 +6,16 @@
 extern crate glenda;
 
 extern crate alloc;
+use crate::layout::*;
 use glenda::cap::CapType;
-use glenda::cap::{ENDPOINT_CAP, ENDPOINT_SLOT, MONITOR_CAP, RECV_SLOT, REPLY_SLOT};
+use glenda::cap::{
+    CSPACE_CAP, ENDPOINT_CAP, ENDPOINT_SLOT, MONITOR_CAP, RECV_SLOT, REPLY_SLOT, VSPACE_CAP,
+};
 use glenda::client::{ProcessClient, ResourceClient};
 use glenda::error::Error;
 use glenda::interface::{ResourceService, SystemService};
 use glenda::ipc::Badge;
+use glenda::utils::manager::{CSpaceManager, VSpaceManager};
 
 mod config;
 mod layout;
@@ -26,10 +30,15 @@ fn main() -> usize {
     log!("Init System starting...");
     let mut proc_client = ProcessClient::new(MONITOR_CAP);
     let mut res_client = ResourceClient::new(MONITOR_CAP);
+
+    let mut cspace = CSpaceManager::new(CSPACE_CAP, 16);
+    let mut vspace = VSpaceManager::new(VSPACE_CAP, SCRATCH_VA, SCRATCH_SIZE);
+
     res_client
         .alloc(Badge::null(), CapType::Endpoint, 0, ENDPOINT_SLOT)
         .expect("Failed to allocate endpoint cap for 9ball");
-    let mut server = NineBallManager::new(&mut proc_client, &mut res_client);
+    let mut server =
+        NineBallManager::new(&mut proc_client, &mut res_client, &mut cspace, &mut vspace);
 
     if let Err(e) = load_9ball(&mut server) {
         log!("Failed to load: {:?}", e);
@@ -40,7 +49,7 @@ fn main() -> usize {
 }
 
 fn load_9ball(server: &mut NineBallManager) -> Result<(), Error> {
-    server.init()?;
     server.listen(ENDPOINT_CAP, REPLY_SLOT, RECV_SLOT)?;
+    server.init()?;
     Ok(())
 }
