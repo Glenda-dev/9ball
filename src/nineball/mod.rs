@@ -88,22 +88,41 @@ impl<'a> NineBallManager<'a> {
 
             for name in to_start {
                 match self.start_service(&name) {
-                    Ok(_) => made_progress = true,
+                    Ok(_) => {
+                        made_progress = true;
+                    }
                     Err(e) => {
                         error!("Bootstrap: Failed to start service {}: {:?}", name, e);
                         // Mark as Failed to avoid repeated attempts in this cycle
                         self.services.insert(
                             name.clone(),
-                            ServiceStatus {
-                                name: name.clone(),
-                                running: ServiceState::Failed,
-                                pid: 0,
-                            },
+                            ServiceStatus::new(name.clone(), 0),
                         );
                     }
                 }
             }
         }
+
+        // Check if all autostart services are running
+        let mut all_running = true;
+        for service in &self.config.services {
+            if service.auto_start {
+                if let Some(status) = self.services.get(&service.name) {
+                    if status.running != ServiceState::Running {
+                        all_running = false;
+                        break;
+                    }
+                } else {
+                    all_running = false;
+                    break;
+                }
+            }
+        }
+
+        if all_running && !self.config.services.is_empty() {
+            log!("All services are successfully started!");
+        }
+
         Ok(())
     }
 }
