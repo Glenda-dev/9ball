@@ -1,7 +1,7 @@
 use crate::NineBallManager;
 use crate::layout::{MANIFEST_ADDR, MANIFEST_SLOT};
 use glenda::arch::mem::PGSIZE;
-use glenda::cap::{CapPtr, Endpoint, Reply};
+use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Reply};
 use glenda::error::Error;
 use glenda::interface::{InitService, ResourceService, SystemService};
 use glenda::ipc::server::handle_call;
@@ -74,6 +74,7 @@ impl<'a> SystemService for NineBallManager<'a> {
             let res = self.dispatch(&mut utcb);
             if let Err(e) = res {
                 if e == Error::Success {
+                    let _ = CSPACE_CAP.delete(self.reply.cap());
                     continue;
                 }
                 error!(
