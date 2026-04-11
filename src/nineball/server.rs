@@ -37,9 +37,9 @@ impl<'a> SystemService for NineBallManager<'a> {
         Ok(())
     }
     fn listen(&mut self, ep: Endpoint, reply: CapPtr, recv: CapPtr) -> Result<(), Error> {
-        self.endpoint = ep;
-        self.reply = Reply::from(reply);
-        self.recv = recv;
+        self.ipc.endpoint = ep;
+        self.ipc.reply = Reply::from(reply);
+        self.ipc.recv = recv;
         self.res_client.register_cap(
             Badge::null(),
             ResourceType::Endpoint,
@@ -49,17 +49,20 @@ impl<'a> SystemService for NineBallManager<'a> {
         Ok(())
     }
     fn run(&mut self) -> Result<(), Error> {
-        if self.endpoint.cap().is_null() || self.reply.cap().is_null() || self.recv.is_null() {
+        if self.ipc.endpoint.cap().is_null()
+            || self.ipc.reply.cap().is_null()
+            || self.ipc.recv.is_null()
+        {
             return Err(Error::NotInitialized);
         }
         log!("Bootstrap system...");
         self.bootstrap()?;
-        self.running = true;
-        while self.running {
+        self.ipc.running = true;
+        while self.ipc.running {
             let mut utcb = unsafe { UTCB::new() };
             utcb.clear();
-            utcb.set_reply_window(self.reply.cap());
-            match self.endpoint.recv(&mut utcb) {
+            utcb.set_reply_window(self.ipc.reply.cap());
+            match self.ipc.endpoint.recv(&mut utcb) {
                 Ok(b) => b,
                 Err(e) => {
                     error!("Recv error: {:?}", e);
@@ -74,7 +77,7 @@ impl<'a> SystemService for NineBallManager<'a> {
             let res = self.dispatch(&mut utcb);
             if let Err(e) = res {
                 if e == Error::Success {
-                    let _ = CSPACE_CAP.delete(self.reply.cap());
+                    let _ = CSPACE_CAP.delete(self.ipc.reply.cap());
                     continue;
                 }
                 error!(
@@ -142,9 +145,9 @@ impl<'a> SystemService for NineBallManager<'a> {
         }
     }
     fn reply(&mut self, utcb: &mut UTCB) -> Result<(), Error> {
-        self.reply.reply(utcb)
+        self.ipc.reply.reply(utcb)
     }
     fn stop(&mut self) {
-        self.running = false;
+        self.ipc.running = false;
     }
 }

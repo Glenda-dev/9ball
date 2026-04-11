@@ -12,11 +12,15 @@ use glenda::interface::InitService;
 use glenda::protocol::init::{ServiceState, ServiceStatus};
 use glenda::utils::manager::{CSpaceManager, VSpaceManager};
 
-pub struct NineBallManager<'a> {
+pub struct NineBallIpc {
     pub running: bool,
     pub endpoint: Endpoint,
     pub reply: Reply,
     pub recv: CapPtr,
+}
+
+pub struct NineBallManager<'a> {
+    pub ipc: NineBallIpc,
     pub config: Manifest,
     pub proc_client: &'a mut ProcessClient,
     pub res_client: &'a mut ResourceClient,
@@ -33,10 +37,12 @@ impl<'a> NineBallManager<'a> {
         vspace: &'a mut VSpaceManager,
     ) -> Self {
         Self {
-            running: false,
-            endpoint: Endpoint::from(CapPtr::null()),
-            reply: Reply::from(CapPtr::null()),
-            recv: CapPtr::null(),
+            ipc: NineBallIpc {
+                running: false,
+                endpoint: Endpoint::from(CapPtr::null()),
+                reply: Reply::from(CapPtr::null()),
+                recv: CapPtr::null(),
+            },
             config: Manifest::new(),
             services: BTreeMap::new(),
             proc_client,
