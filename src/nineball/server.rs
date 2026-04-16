@@ -19,7 +19,7 @@ impl<'a> SystemService for NineBallManager<'a> {
         let (frame, size) =
             self.res_client.get_config(Badge::null(), "init.json", MANIFEST_SLOT)?;
 
-        self.vspace.map_frame(
+        self.vspace.map_page(
             frame,
             MANIFEST_ADDR,
             Perms::READ | Perms::WRITE,
