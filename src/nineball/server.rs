@@ -3,6 +3,7 @@ use crate::layout::{MANIFEST_ADDR, MANIFEST_SLOT};
 use glenda::arch::mem::PGSIZE;
 use glenda::cap::{CSPACE_CAP, CapPtr, Endpoint, Reply};
 use glenda::error::Error;
+use glenda::interface::VSpaceService;
 use glenda::interface::{InitService, ResourceService, SystemService};
 use glenda::ipc::server::handle_call;
 use glenda::ipc::{Badge, MsgTag, UTCB};
@@ -11,7 +12,6 @@ use glenda::protocol;
 use glenda::protocol::resource::INIT_ENDPOINT;
 use glenda::protocol::resource::ResourceType;
 use glenda::utils::align::align_up;
-use glenda::interface::VSpaceService;
 
 impl<'a> SystemService for NineBallManager<'a> {
     fn init(&mut self) -> Result<(), Error> {

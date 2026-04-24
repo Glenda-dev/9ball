@@ -100,10 +100,7 @@ impl<'a> NineBallManager<'a> {
                     Err(e) => {
                         error!("Bootstrap: Failed to start service {}: {:?}", name, e);
                         // Mark as Failed to avoid repeated attempts in this cycle
-                        self.services.insert(
-                            name.clone(),
-                            ServiceStatus::new(name.clone(), 0),
-                        );
+                        self.services.insert(name.clone(), ServiceStatus::new(name.clone(), 0));
                     }
                 }
             }
